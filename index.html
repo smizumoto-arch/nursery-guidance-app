@@ -38,6 +38,7 @@
         {
             id: "1",
             name: "さくら保育園",
+            region: "",
             checklist: [
             { id: "c1", text: "園の概要説明", completed: false, memo: "", completedDate: "", nextActionDate: "" },
             { id: "c2", text: "料金体系の説明", completed: false, memo: "", completedDate: "", nextActionDate: "" },
@@ -55,20 +56,24 @@
         const [isAddingItem, setIsAddingItem] = useState(false);
         const [isLoaded, setIsLoaded] = useState(false);
         const [searchQuery, setSearchQuery] = useState("");
+        const [selectedRegionFilter, setSelectedRegionFilter] = useState("");
+        const [newNurseryRegion, setNewNurseryRegion] = useState("");
 
         // 初回読み込み時にLocalStorageからデータを取得
         useEffect(() => {
             const savedData = localStorage.getItem("nurseryGuidanceData");
             if (savedData) {
             const parsed = JSON.parse(savedData);
-            setNurseries(parsed);
-            if (parsed.length > 0) {
-                setSelectedNurseryId(parsed[0].id);
+            const validData = parsed.map(n => ({ ...n, region: n.region || "" }));
+            setNurseries(validData);
+            if (validData.length > 0) {
+                setSelectedNurseryId(validData[0].id);
             }
             } else {
-            setNurseries(defaultData);
-            setSelectedNurseryId(defaultData[0].id);
-            localStorage.setItem("nurseryGuidanceData", JSON.stringify(defaultData));
+            const dataWithRegion = defaultData.map(n => ({ ...n, region: n.region || "" }));
+            setNurseries(dataWithRegion);
+            setSelectedNurseryId(dataWithRegion[0].id);
+            localStorage.setItem("nurseryGuidanceData", JSON.stringify(dataWithRegion));
             }
             setIsLoaded(true);
         }, []);
@@ -80,9 +85,13 @@
             }
         }, [nurseries, isLoaded]);
 
-        const filteredNurseries = nurseries.filter(nursery => 
-            nursery.name.includes(searchQuery)
-        );
+        const uniqueRegions = Array.from(new Set(nurseries.map(n => n.region).filter(Boolean)));
+
+        const filteredNurseries = nurseries.filter(nursery => {
+            const matchName = nursery.name.includes(searchQuery);
+            const matchRegion = selectedRegionFilter === "" || nursery.region === selectedRegionFilter;
+            return matchName && matchRegion;
+        });
 
         const selectedNursery = nurseries.find(n => n.id === selectedNurseryId);
 
@@ -108,12 +117,14 @@
             const newNursery = {
             id: newId,
             name: newNurseryName.trim(),
+            region: newNurseryRegion.trim(),
             checklist: initialChecklist
             };
             
             setNurseries([...nurseries, newNursery]);
             setSelectedNurseryId(newId);
             setNewNurseryName("");
+            setNewNurseryRegion("");
             setIsAddingNursery(false);
         };
 
@@ -239,18 +250,32 @@
                             対象の保育園を選択
                         </label>
                         <div className="flex flex-col gap-3">
-                            <div className="relative">
-                                <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-gray-400">
-                                    <SearchIcon />
+                            <div className="flex flex-col sm:flex-row gap-3">
+                                <div className="relative flex-1">
+                                    <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-gray-400">
+                                        <SearchIcon />
+                                    </div>
+                                    <input
+                                        type="text"
+                                        id="nursery-search"
+                                        className="block w-full rounded-md border-gray-300 border py-2 pl-10 pr-3 shadow-sm focus:border-blue-500 focus:ring-blue-500 text-sm bg-white transition-colors"
+                                        placeholder="保育園を検索..."
+                                        value={searchQuery}
+                                        onChange={(e) => setSearchQuery(e.target.value)}
+                                    />
                                 </div>
-                                <input
-                                    type="text"
-                                    id="nursery-search"
-                                    className="block w-full rounded-md border-gray-300 border py-2 pl-10 pr-3 shadow-sm focus:border-blue-500 focus:ring-blue-500 text-sm bg-white transition-colors"
-                                    placeholder="保育園を検索..."
-                                    value={searchQuery}
-                                    onChange={(e) => setSearchQuery(e.target.value)}
-                                />
+                                <div className="sm:w-48">
+                                    <select
+                                        className="block w-full rounded-md border-gray-300 border py-2 px-3 shadow-sm focus:border-blue-500 focus:ring-blue-500 text-sm bg-white"
+                                        value={selectedRegionFilter}
+                                        onChange={(e) => setSelectedRegionFilter(e.target.value)}
+                                    >
+                                        <option value="">すべての地域</option>
+                                        {uniqueRegions.map(region => (
+                                            <option key={region} value={region}>{region}</option>
+                                        ))}
+                                    </select>
+                                </div>
                             </div>
                             <div className="flex items-center gap-2">
                                 <select
@@ -262,7 +287,7 @@
                                 {filteredNurseries.length === 0 && <option value="">{nurseries.length === 0 ? "登録なし" : "該当なし"}</option>}
                                 {filteredNurseries.map((nursery) => (
                                     <option key={nursery.id} value={nursery.id}>
-                                    {nursery.name}
+                                    {nursery.name} {nursery.region ? `（${nursery.region}）` : ""}
                                     </option>
                                 ))}
                                 </select>
@@ -288,17 +313,30 @@
 
                 {isAddingNursery && (
                     <form onSubmit={handleAddNursery} className="mt-4 p-4 bg-blue-50/50 rounded-lg border border-blue-100 flex flex-col sm:flex-row items-end gap-3 animate-fade-in-down">
-                    <div className="flex-1 w-full">
-                        <label htmlFor="new-nursery" className="block text-sm font-medium text-blue-800 mb-1">新規保育園名</label>
-                        <input
-                        type="text"
-                        id="new-nursery"
-                        className="block w-full rounded-md border-gray-300 border py-2 px-3 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
-                        placeholder="例：みどり保育園"
-                        value={newNurseryName}
-                        onChange={(e) => setNewNurseryName(e.target.value)}
-                        autoFocus
-                        />
+                    <div className="flex-1 w-full grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div>
+                            <label htmlFor="new-nursery" className="block text-sm font-medium text-blue-800 mb-1">新規保育園名</label>
+                            <input
+                            type="text"
+                            id="new-nursery"
+                            className="block w-full rounded-md border-gray-300 border py-2 px-3 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
+                            placeholder="例：みどり保育園"
+                            value={newNurseryName}
+                            onChange={(e) => setNewNurseryName(e.target.value)}
+                            autoFocus
+                            />
+                        </div>
+                        <div>
+                            <label htmlFor="new-region" className="block text-sm font-medium text-blue-800 mb-1">地域（エリア）</label>
+                            <input
+                            type="text"
+                            id="new-region"
+                            className="block w-full rounded-md border-gray-300 border py-2 px-3 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
+                            placeholder="例：新宿区"
+                            value={newNurseryRegion}
+                            onChange={(e) => setNewNurseryRegion(e.target.value)}
+                            />
+                        </div>
                     </div>
                     <button
                         type="submit"
