@@ -39,9 +39,9 @@
             id: "1",
             name: "さくら保育園",
             checklist: [
-            { id: "c1", text: "園の概要説明", completed: false, memo: "" },
-            { id: "c2", text: "料金体系の説明", completed: false, memo: "" },
-            { id: "c3", text: "持ち物・ルールの説明", completed: false, memo: "" }
+            { id: "c1", text: "園の概要説明", completed: false, memo: "", completedDate: "", nextActionDate: "" },
+            { id: "c2", text: "料金体系の説明", completed: false, memo: "", completedDate: "", nextActionDate: "" },
+            { id: "c3", text: "持ち物・ルールの説明", completed: false, memo: "", completedDate: "", nextActionDate: "" }
             ]
         }
         ];
@@ -99,7 +99,9 @@
                 initialChecklist = nurseries[0].checklist.map(item => ({
                     ...item,
                     completed: false,
-                    memo: ""
+                    memo: "",
+                    completedDate: "",
+                    nextActionDate: ""
                 }));
             }
             
@@ -128,13 +130,23 @@
 
         // チェック項目のON/OFF
         const handleToggleCheck = (itemId) => {
+            const today = new Date();
+            const localDate = today.getFullYear() + '-' + String(today.getMonth() + 1).padStart(2, '0') + '-' + String(today.getDate()).padStart(2, '0');
             setNurseries(nurseries.map(nursery => {
             if (nursery.id === selectedNurseryId) {
                 return {
                 ...nursery,
-                checklist: nursery.checklist.map(item => 
-                    item.id === itemId ? { ...item, completed: !item.completed } : item
-                )
+                checklist: nursery.checklist.map(item => {
+                    if (item.id === itemId) {
+                        const newCompleted = !item.completed;
+                        return { 
+                            ...item, 
+                            completed: newCompleted,
+                            completedDate: newCompleted ? localDate : ""
+                        };
+                    }
+                    return item;
+                })
                 };
             }
             return nursery;
@@ -156,6 +168,21 @@
             }));
         };
 
+        // 日付の更新
+        const handleUpdateDates = (itemId, field, value) => {
+            setNurseries(nurseries.map(nursery => {
+            if (nursery.id === selectedNurseryId) {
+                return {
+                ...nursery,
+                checklist: nursery.checklist.map(item => 
+                    item.id === itemId ? { ...item, [field]: value } : item
+                )
+                };
+            }
+            return nursery;
+            }));
+        };
+
         // チェック項目の追加
         const handleAddItem = (e) => {
             e.preventDefault();
@@ -170,7 +197,7 @@
                 ...nursery,
                 checklist: [
                     ...nursery.checklist,
-                    { id: newItemId, text: newItemTextTrimmed, completed: false, memo: "" }
+                    { id: newItemId, text: newItemTextTrimmed, completed: false, memo: "", completedDate: "", nextActionDate: "" }
                 ]
                 };
             }));
@@ -341,6 +368,26 @@
                                         value={item.memo || ""}
                                         onChange={(e) => handleUpdateMemo(item.id, e.target.value)}
                                     ></textarea>
+                                </div>
+                                <div className="mt-3 flex flex-col sm:flex-row gap-3">
+                                    <div className="flex-1">
+                                        <label className="block text-[11px] font-medium text-gray-500 mb-1">完了日</label>
+                                        <input
+                                            type="date"
+                                            className="block w-full rounded-md border-gray-200 border py-1.5 px-2.5 text-sm text-gray-700 bg-gray-50/50 focus:bg-white focus:border-blue-500 focus:ring-blue-500 transition-colors"
+                                            value={item.completedDate || ""}
+                                            onChange={(e) => handleUpdateDates(item.id, 'completedDate', e.target.value)}
+                                        />
+                                    </div>
+                                    <div className="flex-1">
+                                        <label className="block text-[11px] font-medium text-gray-500 mb-1">ネクストアクション</label>
+                                        <input
+                                            type="date"
+                                            className="block w-full rounded-md border-gray-200 border py-1.5 px-2.5 text-sm text-gray-700 bg-gray-50/50 focus:bg-white focus:border-blue-500 focus:ring-blue-500 transition-colors"
+                                            value={item.nextActionDate || ""}
+                                            onChange={(e) => handleUpdateDates(item.id, 'nextActionDate', e.target.value)}
+                                        />
+                                    </div>
                                 </div>
                             </div>
                             </div>
