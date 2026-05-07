@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>保育園案内状況管理</title>
+    <title>保育園案内コンシェルジュ | 案内状況管理</title>
     <!-- Tailwind CSS (CDN) -->
     <script src="https://cdn.tailwindcss.com"></script>
     <!-- React & ReactDOM (CDN) -->
@@ -11,488 +11,624 @@
     <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
     <!-- Babel (JSXコンパイル用 CDN) -->
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <!-- Firebase SDK (Compat version for easier single-file use) -->
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore-compat.js"></script>
     <!-- Google Fonts -->
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Outfit:wght@500;600;700&display=swap" rel="stylesheet">
+    
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['Inter', 'sans-serif'],
+                        heading: ['Outfit', 'sans-serif'],
+                    },
+                    colors: {
+                        primary: {
+                            50: '#f0f4ff',
+                            100: '#e0e9fe',
+                            200: '#c1d3fe',
+                            300: '#92b3fd',
+                            400: '#5c89fa',
+                            500: '#3b66f5',
+                            600: '#2546eb',
+                            700: '#1d36d8',
+                        },
+                        nursery: {
+                            soft: '#FDF2F8',
+                            warm: '#FFFBEB',
+                            cool: '#F0F9FF',
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+
     <style>
-        body { font-family: 'Inter', sans-serif; background-color: #f9fafb; }
+        :root {
+            --glass-bg: rgba(255, 255, 255, 0.7);
+            --glass-border: rgba(255, 255, 255, 0.4);
+        }
+
+        body {
+            background: radial-gradient(circle at top left, #f0f4ff 0%, #ffffff 40%, #fff1f2 100%);
+            min-height: 100vh;
+            color: #1e293b;
+        }
+
+        .glass-card {
+            background: var(--glass-bg);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border: 1px solid var(--glass-border);
+            box-shadow: 0 8px 32px 0 rgba(31, 38, 135, 0.07);
+        }
+
+        .premium-shadow {
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.04), 0 4px 6px -2px rgba(0, 0, 0, 0.02);
+        }
+
+        .animate-float {
+            animation: float 6s ease-in-out infinite;
+        }
+
+        @keyframes float {
+            0%, 100% { transform: translateY(0); }
+            50% { transform: translateY(-10px); }
+        }
+
+        .transition-all-custom {
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        /* Custom Checkbox */
+        .checkbox-container input:checked ~ .checkmark {
+            background-color: #3b66f5;
+            border-color: #3b66f5;
+        }
+        
+        /* Hide scrollbar for Chrome, Safari and Opera */
+        .no-scrollbar::-webkit-scrollbar {
+            display: none;
+        }
+        /* Hide scrollbar for IE, Edge and Firefox */
+        .no-scrollbar {
+            -ms-overflow-style: none;  /* IE and Edge */
+            scrollbar-width: none;  /* Firefox */
+        }
     </style>
 </head>
 <body>
     <div id="root"></div>
+
     <script type="text/babel">
-        const { useState, useEffect } = React;
+        const { useState, useEffect, useMemo } = React;
 
-        const PlusIcon = () => (
-        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
-        );
+        // --- Firebase Configuration ---
+        // 既存の設定値を保持（ユーザーが環境に合わせて書き換えることを想定）
+        const firebaseConfig = {
+            apiKey: "AIzaSyCaH8njqfP43PrWvf6e7VHwSrv21t6PUu4",
+            authDomain: "hoisapo-pj.firebaseapp.com",
+            projectId: "hoisapo-pj",
+            storageBucket: "hoisapo-pj.firebasestorage.app",
+            messagingSenderId: "49253930087",
+            appId: "1:49253930087:web:a99963e9510f67d7d070c2"
+        };
 
-        const SearchIcon = () => (
-        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
-        );
-
-        const TrashIcon = () => (
-        <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
-        );
-
-        const defaultData = [
-        {
-            id: "1",
-            name: "さくら保育園",
-            region: "",
-            checklist: [
-            { id: "c1", text: "園の概要説明", completed: false, memo: "", completedDate: "", nextActionDate: "" },
-            { id: "c2", text: "料金体系の説明", completed: false, memo: "", completedDate: "", nextActionDate: "" },
-            { id: "c3", text: "持ち物・ルールの説明", completed: false, memo: "", completedDate: "", nextActionDate: "" }
-            ]
+        if (!firebase.apps.length) {
+            firebase.initializeApp(firebaseConfig);
         }
+        const auth = firebase.auth();
+        const db = firebase.firestore();
+
+        // --- Constants & Defaults ---
+        const defaultItems = [
+            { id: "c1", text: "園の理念・方針の説明", completed: false, memo: "", completedDate: "", nextActionDate: "" },
+            { id: "c2", text: "一日のスケジュール紹介", completed: false, memo: "", completedDate: "", nextActionDate: "" },
+            { id: "c3", text: "給食・アレルギー対応について", completed: false, memo: "", completedDate: "", nextActionDate: "" },
+            { id: "c4", text: "延長保育・料金体系の確認", completed: false, memo: "", completedDate: "", nextActionDate: "" },
+            { id: "c5", text: "持ち物・準備品リストの受領", completed: false, memo: "", completedDate: "", nextActionDate: "" },
+            { id: "c6", text: "緊急連絡・防犯対策の説明", completed: false, memo: "", completedDate: "", nextActionDate: "" }
         ];
 
-        function App() {
-        const [nurseries, setNurseries] = useState([]);
-        const [selectedNurseryId, setSelectedNurseryId] = useState("");
-        const [newNurseryName, setNewNurseryName] = useState("");
-        const [isAddingNursery, setIsAddingNursery] = useState(false);
-        const [newItemText, setNewItemText] = useState("");
-        const [isAddingItem, setIsAddingItem] = useState(false);
-        const [isLoaded, setIsLoaded] = useState(false);
-        const [searchQuery, setSearchQuery] = useState("");
-        const [selectedRegionFilter, setSelectedRegionFilter] = useState("");
-        const [newNurseryRegion, setNewNurseryRegion] = useState("");
+        // --- Icons ---
+        const IconCheck = () => <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M5 13l4 4L19 7" /></svg>;
+        const IconPlus = () => <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6" /></svg>;
+        const IconTrash = () => <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>;
+        const IconSearch = () => <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>;
+        const IconSchool = () => <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" /></svg>;
+        const IconUser = () => <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" /></svg>;
+        const IconLogout = () => <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" /></svg>;
 
-        // 初回読み込み時にLocalStorageからデータを取得
-        useEffect(() => {
-            const savedData = localStorage.getItem("nurseryGuidanceData");
-            if (savedData) {
-            const parsed = JSON.parse(savedData);
-            const validData = parsed.map(n => ({ ...n, region: n.region || "" }));
-            setNurseries(validData);
-            if (validData.length > 0) {
-                setSelectedNurseryId(validData[0].id);
-            }
-            } else {
-            const dataWithRegion = defaultData.map(n => ({ ...n, region: n.region || "" }));
-            setNurseries(dataWithRegion);
-            setSelectedNurseryId(dataWithRegion[0].id);
-            localStorage.setItem("nurseryGuidanceData", JSON.stringify(dataWithRegion));
-            }
-            setIsLoaded(true);
-        }, []);
+        // --- Components ---
 
-        // nurseriesが更新されるたびにLocalStorageを更新
-        useEffect(() => {
-            if (isLoaded) {
-            localStorage.setItem("nurseryGuidanceData", JSON.stringify(nurseries));
-            }
-        }, [nurseries, isLoaded]);
+        function LoginView() {
+            const [isLogin, setIsLogin] = useState(true);
+            const [email, setEmail] = useState("");
+            const [password, setPassword] = useState("");
+            const [error, setError] = useState("");
+            const [loading, setLoading] = useState(false);
 
-        const uniqueRegions = Array.from(new Set(nurseries.map(n => n.region).filter(Boolean)));
-
-        const filteredNurseries = nurseries.filter(nursery => {
-            const matchName = nursery.name.includes(searchQuery);
-            const matchRegion = selectedRegionFilter === "" || nursery.region === selectedRegionFilter;
-            return matchName && matchRegion;
-        });
-
-        const selectedNursery = nurseries.find(n => n.id === selectedNurseryId);
-
-        // 保育園の追加
-        const handleAddNursery = (e) => {
-            e.preventDefault();
-            if (!newNurseryName.trim()) return;
-            
-            const newId = Date.now().toString();
-            
-            let initialChecklist = [];
-            if (nurseries.length > 0) {
-                // 他の園のチェック項目を引き継ぐ（すべて未完了・メモも空にする）
-                initialChecklist = nurseries[0].checklist.map(item => ({
-                    ...item,
-                    completed: false,
-                    memo: "",
-                    completedDate: "",
-                    nextActionDate: ""
-                }));
-            }
-            
-            const newNursery = {
-            id: newId,
-            name: newNurseryName.trim(),
-            region: newNurseryRegion.trim(),
-            checklist: initialChecklist
-            };
-            
-            setNurseries([...nurseries, newNursery]);
-            setSelectedNurseryId(newId);
-            setNewNurseryName("");
-            setNewNurseryRegion("");
-            setIsAddingNursery(false);
-        };
-
-        // 保育園の削除
-        const handleDeleteNursery = (id) => {
-            if(confirm("本当にこの保育園を削除しますか？")) {
-            const newNurseries = nurseries.filter(n => n.id !== id);
-            setNurseries(newNurseries);
-            if(selectedNurseryId === id) {
-                setSelectedNurseryId(newNurseries.length > 0 ? newNurseries[0].id : "");
-            }
-            }
-        };
-
-        // チェック項目のON/OFF
-        const handleToggleCheck = (itemId) => {
-            const today = new Date();
-            const localDate = today.getFullYear() + '-' + String(today.getMonth() + 1).padStart(2, '0') + '-' + String(today.getDate()).padStart(2, '0');
-            setNurseries(nurseries.map(nursery => {
-            if (nursery.id === selectedNurseryId) {
-                return {
-                ...nursery,
-                checklist: nursery.checklist.map(item => {
-                    if (item.id === itemId) {
-                        const newCompleted = !item.completed;
-                        return { 
-                            ...item, 
-                            completed: newCompleted,
-                            completedDate: newCompleted ? localDate : ""
-                        };
+            const handleSubmit = async (e) => {
+                e.preventDefault();
+                setError("");
+                setLoading(true);
+                try {
+                    if (isLogin) {
+                        await auth.signInWithEmailAndPassword(email, password);
+                    } else {
+                        await auth.createUserWithEmailAndPassword(email, password);
                     }
-                    return item;
-                })
-                };
-            }
-            return nursery;
-            }));
-        };
+                } catch (err) {
+                    let msg = "エラーが発生しました";
+                    if (err.code === "auth/user-not-found" || err.code === "auth/wrong-password") msg = "メールアドレスまたはパスワードが正しくありません";
+                    if (err.code === "auth/email-already-in-use") msg = "このメールアドレスは既に登録されています";
+                    setError(msg);
+                } finally {
+                    setLoading(false);
+                }
+            };
 
-        // メモの更新
-        const handleUpdateMemo = (itemId, memoText) => {
-            setNurseries(nurseries.map(nursery => {
-            if (nursery.id === selectedNurseryId) {
-                return {
-                ...nursery,
-                checklist: nursery.checklist.map(item => 
-                    item.id === itemId ? { ...item, memo: memoText } : item
-                )
-                };
-            }
-            return nursery;
-            }));
-        };
+            return (
+                <div className="min-h-screen flex items-center justify-center px-4 relative overflow-hidden">
+                    <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] bg-primary-100 rounded-full blur-[100px] opacity-60"></div>
+                    <div className="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] bg-rose-100 rounded-full blur-[100px] opacity-60"></div>
+                    
+                    <div className="max-w-md w-full glass-card rounded-[2rem] p-10 relative z-10 animate-fade-in">
+                        <div className="text-center mb-10">
+                            <div className="inline-flex items-center justify-center w-20 h-20 bg-primary-500 text-white rounded-3xl premium-shadow mb-6 animate-float">
+                                <IconSchool />
+                            </div>
+                            <h1 className="text-3xl font-heading font-bold text-gray-900 tracking-tight">
+                                {isLogin ? "Welcome Back" : "Create Account"}
+                            </h1>
+                            <p className="text-gray-500 mt-2 font-medium">保育園案内コンシェルジュ</p>
+                        </div>
 
-        // 日付の更新
-        const handleUpdateDates = (itemId, field, value) => {
-            setNurseries(nurseries.map(nursery => {
-            if (nursery.id === selectedNurseryId) {
-                return {
-                ...nursery,
-                checklist: nursery.checklist.map(item => 
-                    item.id === itemId ? { ...item, [field]: value } : item
-                )
-                };
-            }
-            return nursery;
-            }));
-        };
+                        {error && (
+                            <div className="mb-6 p-4 bg-rose-50 border border-rose-100 text-rose-600 text-sm rounded-2xl flex items-center gap-3">
+                                <div className="w-1.5 h-1.5 bg-rose-500 rounded-full"></div>
+                                {error}
+                            </div>
+                        )}
 
-        // チェック項目の追加
-        const handleAddItem = (e) => {
-            e.preventDefault();
-            if (!newItemText.trim()) return;
+                        <form onSubmit={handleSubmit} className="space-y-5">
+                            <div>
+                                <label className="block text-sm font-semibold text-gray-700 mb-2 ml-1">メールアドレス</label>
+                                <input
+                                    type="email"
+                                    required
+                                    className="w-full px-5 py-4 rounded-2xl border-none bg-white/50 focus:bg-white focus:ring-2 focus:ring-primary-500 outline-none transition-all-custom shadow-inner"
+                                    placeholder="mail@example.com"
+                                    value={email}
+                                    onChange={(e) => setEmail(e.target.value)}
+                                />
+                            </div>
+                            <div>
+                                <label className="block text-sm font-semibold text-gray-700 mb-2 ml-1">パスワード</label>
+                                <input
+                                    type="password"
+                                    required
+                                    className="w-full px-5 py-4 rounded-2xl border-none bg-white/50 focus:bg-white focus:ring-2 focus:ring-primary-500 outline-none transition-all-custom shadow-inner"
+                                    placeholder="••••••••"
+                                    value={password}
+                                    onChange={(e) => setPassword(e.target.value)}
+                                />
+                            </div>
+                            <button
+                                type="submit"
+                                disabled={loading}
+                                className="w-full bg-primary-600 text-white font-bold py-4 rounded-2xl hover:bg-primary-700 hover:scale-[1.02] active:scale-[0.98] transition-all-custom premium-shadow disabled:opacity-50 mt-4"
+                            >
+                                {loading ? "Connecting..." : (isLogin ? "Login" : "Register")}
+                            </button>
+                        </form>
 
-            const newItemId = Date.now().toString();
-            const newItemTextTrimmed = newItemText.trim();
-
-            // すべての保育園に新しいチェック項目を追加
-            setNurseries(nurseries.map(nursery => {
-                return {
-                ...nursery,
-                checklist: [
-                    ...nursery.checklist,
-                    { id: newItemId, text: newItemTextTrimmed, completed: false, memo: "", completedDate: "", nextActionDate: "" }
-                ]
-                };
-            }));
-            setNewItemText("");
-            setIsAddingItem(false);
-        };
-
-        // チェック項目の削除
-        const handleDeleteItem = (itemId) => {
-            // すべての保育園からチェック項目を削除
-            setNurseries(nurseries.map(nursery => {
-                return {
-                ...nursery,
-                checklist: nursery.checklist.filter(item => item.id !== itemId)
-                };
-            }));
+                        <div className="mt-8 text-center">
+                            <button 
+                                onClick={() => setIsLogin(!isLogin)} 
+                                className="text-primary-600 font-semibold text-sm hover:text-primary-700 transition-colors"
+                            >
+                                {isLogin ? "新規登録はこちら" : "ログイン画面に戻る"}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            );
         }
 
-        if (!isLoaded) return <div className="p-8 text-center text-gray-500">読み込み中...</div>;
+        function App() {
+            const [user, setUser] = useState(null);
+            const [nurseries, setNurseries] = useState([]);
+            const [selectedId, setSelectedId] = useState("");
+            const [isAddingNursery, setIsAddingNursery] = useState(false);
+            const [newName, setNewName] = useState("");
+            const [newRegion, setNewRegion] = useState("");
+            const [searchQuery, setSearchQuery] = useState("");
+            const [regionFilter, setRegionFilter] = useState("");
+            const [isAuthChecking, setIsAuthChecking] = useState(true);
 
-        return (
-            <div className="min-h-screen bg-gray-50 pb-20">
-            {/* Header */}
-            <header className="bg-white shadow-sm sticky top-0 z-10">
-                <div className="max-w-3xl mx-auto px-4 py-4 sm:px-6 lg:px-8 flex items-center justify-between">
-                <h1 className="text-xl font-bold text-gray-800 flex items-center gap-2">
-                    <svg className="w-6 h-6 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4"></path></svg>
-                    保育園案内チェック
-                </h1>
+            // Auth State
+            useEffect(() => {
+                const unsubscribe = auth.onAuthStateChanged(u => {
+                    setUser(u);
+                    setIsAuthChecking(false);
+                });
+                return () => unsubscribe();
+            }, []);
+
+            // Firestore Sync
+            useEffect(() => {
+                if (!user) return;
+                const userDocRef = db.collection('users').doc(user.uid);
+                const unsubscribe = userDocRef.onSnapshot(async doc => {
+                    if (doc.exists) {
+                        const data = doc.data().nurseries || [];
+                        setNurseries(data);
+                        if (!selectedId && data.length > 0) setSelectedId(data[0].id);
+                    } else {
+                        // 初回移行
+                        const localData = localStorage.getItem("nurseryGuidanceData");
+                        const initial = localData ? JSON.parse(localData) : [{ id: "1", name: "サンライズ保育園", region: "東京都", checklist: defaultItems }];
+                        await userDocRef.set({ nurseries: initial });
+                        localStorage.removeItem("nurseryGuidanceData");
+                    }
+                });
+                return () => unsubscribe();
+            }, [user]);
+
+            const updateDB = async (newData) => {
+                if (!user) return;
+                await db.collection('users').doc(user.uid).set({ nurseries: newData }, { merge: true });
+            };
+
+            // Derived State
+            const filteredNurseries = useMemo(() => {
+                return nurseries.filter(n => 
+                    n.name.toLowerCase().includes(searchQuery.toLowerCase()) &&
+                    (regionFilter === "" || n.region === regionFilter)
+                );
+            }, [nurseries, searchQuery, regionFilter]);
+
+            const selectedNursery = nurseries.find(n => n.id === selectedId);
+            const regions = Array.from(new Set(nurseries.map(n => n.region).filter(Boolean)));
+
+            // Handlers
+            const handleAddNursery = async (e) => {
+                e.preventDefault();
+                if (!newName.trim()) return;
+                const newId = Date.now().toString();
+                const items = nurseries.length > 0 ? nurseries[0].checklist.map(i => ({ ...i, completed: false, memo: "", completedDate: "", nextActionDate: "" })) : defaultItems;
+                const updated = [...nurseries, { id: newId, name: newName, region: newRegion, checklist: items }];
+                await updateDB(updated);
+                setSelectedId(newId);
+                setNewName("");
+                setNewRegion("");
+                setIsAddingNursery(false);
+            };
+
+            const handleDeleteNursery = async (id) => {
+                if (!confirm("この保育園のデータを削除しますか？")) return;
+                const updated = nurseries.filter(n => n.id !== id);
+                await updateDB(updated);
+                if (selectedId === id) setSelectedId(updated.length > 0 ? updated[0].id : "");
+            };
+
+            const handleToggleItem = async (itemId) => {
+                const today = new Date().toISOString().split('T')[0];
+                const updated = nurseries.map(n => {
+                    if (n.id === selectedId) {
+                        return {
+                            ...n,
+                            checklist: n.checklist.map(item => {
+                                if (item.id === itemId) {
+                                    const next = !item.completed;
+                                    return { ...item, completed: next, completedDate: next ? today : "" };
+                                }
+                                return item;
+                            })
+                        };
+                    }
+                    return n;
+                });
+                await updateDB(updated);
+            };
+
+            const handleUpdateItem = async (itemId, field, value) => {
+                const updated = nurseries.map(n => {
+                    if (n.id === selectedId) {
+                        return {
+                            ...n,
+                            checklist: n.checklist.map(item => item.id === itemId ? { ...item, [field]: value } : item)
+                        };
+                    }
+                    return n;
+                });
+                await updateDB(updated);
+            };
+
+            const handleAddItemGlobal = async (text) => {
+                if (!text.trim()) return;
+                const newItem = { id: Date.now().toString(), text, completed: false, memo: "", completedDate: "", nextActionDate: "" };
+                const updated = nurseries.map(n => ({ ...n, checklist: [...n.checklist, newItem] }));
+                await updateDB(updated);
+            };
+
+            const handleDeleteItemGlobal = async (itemId) => {
+                const updated = nurseries.map(n => ({ ...n, checklist: n.checklist.filter(i => i.id !== itemId) }));
+                await updateDB(updated);
+            };
+
+            if (isAuthChecking) return (
+                <div className="min-h-screen flex items-center justify-center">
+                    <div className="w-10 h-10 border-4 border-primary-200 border-t-primary-600 rounded-full animate-spin"></div>
                 </div>
-            </header>
+            );
+            if (!user) return <LoginView />;
 
-            <main className="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-                {/* Nursery Selector */}
-                <section className="bg-white rounded-xl shadow-sm border border-gray-200 p-5 mb-6">
-                <div className="flex flex-col sm:flex-row sm:items-end gap-4">
-                    <div className="flex-1 w-full">
-                        <label htmlFor="nursery-search" className="block text-sm font-medium text-gray-700 mb-1.5">
-                            対象の保育園を選択
-                        </label>
-                        <div className="flex flex-col gap-3">
-                            <div className="flex flex-col sm:flex-row gap-3">
-                                <div className="relative flex-1">
-                                    <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-gray-400">
-                                        <SearchIcon />
-                                    </div>
-                                    <input
-                                        type="text"
-                                        id="nursery-search"
-                                        className="block w-full rounded-md border-gray-300 border py-2 pl-10 pr-3 shadow-sm focus:border-blue-500 focus:ring-blue-500 text-sm bg-white transition-colors"
-                                        placeholder="保育園を検索..."
-                                        value={searchQuery}
-                                        onChange={(e) => setSearchQuery(e.target.value)}
-                                    />
-                                </div>
-                                <div className="sm:w-48">
-                                    <select
-                                        className="block w-full rounded-md border-gray-300 border py-2 px-3 shadow-sm focus:border-blue-500 focus:ring-blue-500 text-sm bg-white"
-                                        value={selectedRegionFilter}
-                                        onChange={(e) => setSelectedRegionFilter(e.target.value)}
-                                    >
-                                        <option value="">すべての地域</option>
-                                        {uniqueRegions.map(region => (
-                                            <option key={region} value={region}>{region}</option>
-                                        ))}
-                                    </select>
-                                </div>
-                            </div>
-                            <div className="flex items-center gap-2">
-                                <select
-                                id="nursery-select"
-                                className="block w-full rounded-md border-gray-300 border py-2.5 px-3 shadow-sm focus:border-blue-500 focus:ring-blue-500 text-base bg-gray-50"
-                                value={selectedNurseryId}
-                                onChange={(e) => setSelectedNurseryId(e.target.value)}
-                                >
-                                {filteredNurseries.length === 0 && <option value="">{nurseries.length === 0 ? "登録なし" : "該当なし"}</option>}
-                                {filteredNurseries.map((nursery) => (
-                                    <option key={nursery.id} value={nursery.id}>
-                                    {nursery.name} {nursery.region ? `（${nursery.region}）` : ""}
-                                    </option>
-                                ))}
-                                </select>
-                                <button
-                                onClick={() => setIsAddingNursery(!isAddingNursery)}
-                                className="inline-flex items-center p-2.5 border border-transparent rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-colors flex-shrink-0"
-                                title="保育園を追加"
-                                >
-                                <PlusIcon />
-                                </button>
-                            </div>
-                        </div>
-                    </div>
-                    
-                    {nurseries.length > 0 && (
-                    <div className="mt-2 sm:mt-0 flex justify-end pb-1">
-                        <button onClick={() => handleDeleteNursery(selectedNurseryId)} className="text-red-500 hover:text-red-700 text-sm flex items-center gap-1 p-2 transition-colors">
-                        <TrashIcon /> <span className="sm:inline">削除</span>
-                        </button>
-                    </div>
-                    )}
-                </div>
-
-                {isAddingNursery && (
-                    <form onSubmit={handleAddNursery} className="mt-4 p-4 bg-blue-50/50 rounded-lg border border-blue-100 flex flex-col sm:flex-row items-end gap-3 animate-fade-in-down">
-                    <div className="flex-1 w-full grid grid-cols-1 sm:grid-cols-2 gap-3">
+            return (
+                <div className="max-w-5xl mx-auto px-4 py-8 md:py-12">
+                    {/* Header */}
+                    <header className="flex flex-col md:flex-row md:items-center justify-between gap-6 mb-12">
                         <div>
-                            <label htmlFor="new-nursery" className="block text-sm font-medium text-blue-800 mb-1">新規保育園名</label>
-                            <input
-                            type="text"
-                            id="new-nursery"
-                            className="block w-full rounded-md border-gray-300 border py-2 px-3 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
-                            placeholder="例：みどり保育園"
-                            value={newNurseryName}
-                            onChange={(e) => setNewNurseryName(e.target.value)}
-                            autoFocus
-                            />
-                        </div>
-                        <div>
-                            <label htmlFor="new-region" className="block text-sm font-medium text-blue-800 mb-1">地域（エリア）</label>
-                            <input
-                            type="text"
-                            id="new-region"
-                            className="block w-full rounded-md border-gray-300 border py-2 px-3 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
-                            placeholder="例：新宿区"
-                            value={newNurseryRegion}
-                            onChange={(e) => setNewNurseryRegion(e.target.value)}
-                            />
-                        </div>
-                    </div>
-                    <button
-                        type="submit"
-                        disabled={!newNurseryName.trim()}
-                        className="w-full sm:w-auto px-5 py-2.5 sm:py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed mt-2 sm:mt-0"
-                    >
-                        保存
-                    </button>
-                    </form>
-                )}
-                </section>
-
-                {/* Checklist */}
-                {selectedNursery ? (
-                <section className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
-                    <div className="px-5 py-4 border-b border-gray-200 bg-gray-50/80 flex justify-between items-center">
-                    <h2 className="text-lg font-medium text-gray-800">案内内容チェックリスト</h2>
-                    <span className="bg-blue-100 text-blue-800 text-xs font-semibold px-3 py-1 rounded-full">
-                        {selectedNursery.checklist.filter(i => i.completed).length} / {selectedNursery.checklist.length} 完了
-                    </span>
-                    </div>
-                    
-                    <ul className="divide-y divide-gray-100">
-                    {selectedNursery.checklist.length === 0 ? (
-                        <li className="p-8 text-center text-gray-500 text-sm">
-                        チェック項目がありません。下から追加してください。
-                        </li>
-                    ) : (
-                        selectedNursery.checklist.map((item) => (
-                        <li key={item.id} className="p-4 hover:bg-gray-50 transition-colors group">
-                            <div className="flex items-start gap-4">
-                            <div className="flex-shrink-0 pt-0.5">
-                                <button
-                                type="button"
-                                onClick={() => handleToggleCheck(item.id)}
-                                className={`w-6 h-6 rounded border flex items-center justify-center transition-colors ${
-                                    item.completed 
-                                    ? "bg-blue-500 border-blue-500 text-white" 
-                                    : "border-gray-300 text-transparent hover:border-blue-400"
-                                }`}
-                                >
-                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M5 13l4 4L19 7"></path></svg>
-                                </button>
+                            <div className="flex items-center gap-3 mb-2">
+                                <div className="p-2 bg-primary-600 text-white rounded-xl premium-shadow">
+                                    <IconSchool />
+                                </div>
+                                <h1 className="text-2xl font-heading font-bold text-gray-900">保育園案内コンシェルジュ</h1>
                             </div>
-                            <div className="flex-1 min-w-0">
-                                <div className="flex justify-between items-start">
-                                    <div className="flex-1 min-w-0" onClick={() => handleToggleCheck(item.id)}>
-                                        <p className={`text-[15px] sm:text-base cursor-pointer select-none transition-all ${
-                                        item.completed ? "text-gray-400 line-through" : "text-gray-800"
-                                        }`}>
-                                        {item.text}
-                                        </p>
-                                    </div>
+                            <p className="text-gray-500 font-medium ml-12">あなたの保育園探しを、スマートにサポート。</p>
+                        </div>
+                        <div className="flex items-center gap-4 bg-white/50 backdrop-blur-md p-2 pl-4 rounded-2xl border border-white/40 premium-shadow self-end md:self-center">
+                            <div className="text-right hidden sm:block">
+                                <p className="text-xs font-bold text-gray-400 uppercase tracking-wider">Signed in as</p>
+                                <p className="text-sm font-semibold text-gray-700">{user.email}</p>
+                            </div>
+                            <button onClick={() => confirm("ログアウトしますか？") && auth.signOut()} className="p-3 bg-white text-gray-400 hover:text-rose-500 hover:bg-rose-50 rounded-xl transition-all-custom">
+                                <IconLogout />
+                            </button>
+                        </div>
+                    </header>
+
+                    <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
+                        {/* Sidebar: Nursery List */}
+                        <aside className="lg:col-span-4 space-y-6">
+                            <div className="glass-card rounded-[2rem] p-6">
+                                <div className="flex items-center justify-between mb-6">
+                                    <h2 className="text-lg font-heading font-bold text-gray-800">保育園リスト</h2>
                                     <button 
-                                    onClick={() => handleDeleteItem(item.id)}
-                                    className="ml-4 text-gray-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity focus:opacity-100 p-2 -mt-2"
-                                    title="削除"
+                                        onClick={() => setIsAddingNursery(!isAddingNursery)}
+                                        className={`p-2 rounded-xl transition-all-custom ${isAddingNursery ? 'bg-rose-100 text-rose-600 rotate-45' : 'bg-primary-100 text-primary-600 hover:scale-110'}`}
                                     >
-                                    <TrashIcon />
+                                        <IconPlus />
                                     </button>
                                 </div>
-                                <div className="mt-2">
-                                    <textarea
-                                        rows="2"
-                                        className="block w-full rounded-md border-gray-200 border py-2 px-3 text-sm text-gray-700 bg-gray-50/50 focus:bg-white focus:border-blue-500 focus:ring-blue-500 placeholder-gray-400 resize-y transition-colors"
-                                        placeholder="メモを入力..."
-                                        value={item.memo || ""}
-                                        onChange={(e) => handleUpdateMemo(item.id, e.target.value)}
-                                    ></textarea>
-                                </div>
-                                <div className="mt-3 flex flex-col sm:flex-row gap-3">
-                                    <div className="flex-1">
-                                        <label className="block text-[11px] font-medium text-gray-500 mb-1">完了日</label>
-                                        <input
-                                            type="date"
-                                            className="block w-full rounded-md border-gray-200 border py-1.5 px-2.5 text-sm text-gray-700 bg-gray-50/50 focus:bg-white focus:border-blue-500 focus:ring-blue-500 transition-colors"
-                                            value={item.completedDate || ""}
-                                            onChange={(e) => handleUpdateDates(item.id, 'completedDate', e.target.value)}
-                                        />
-                                    </div>
-                                    <div className="flex-1">
-                                        <label className="block text-[11px] font-medium text-gray-500 mb-1">ネクストアクション</label>
-                                        <input
-                                            type="date"
-                                            className="block w-full rounded-md border-gray-200 border py-1.5 px-2.5 text-sm text-gray-700 bg-gray-50/50 focus:bg-white focus:border-blue-500 focus:ring-blue-500 transition-colors"
-                                            value={item.nextActionDate || ""}
-                                            onChange={(e) => handleUpdateDates(item.id, 'nextActionDate', e.target.value)}
-                                        />
-                                    </div>
-                                </div>
-                            </div>
-                            </div>
-                        </li>
-                        ))
-                    )}
-                    </ul>
 
-                    <div className="p-5 border-t border-gray-100 bg-gray-50/50">
-                    {!isAddingItem ? (
-                        <button
-                        onClick={() => setIsAddingItem(true)}
-                        className="w-full py-3.5 border-2 border-dashed border-gray-300 rounded-lg text-sm font-medium text-gray-600 hover:border-blue-500 hover:text-blue-600 transition-colors flex items-center justify-center gap-2"
-                        >
-                        <PlusIcon />
-                        新しい項目を追加
-                        </button>
-                    ) : (
-                        <form onSubmit={handleAddItem} className="flex flex-col sm:flex-row gap-3">
-                        <input
-                            type="text"
-                            className="flex-1 block w-full rounded-md border-gray-300 border py-2.5 px-3 shadow-sm focus:border-blue-500 focus:ring-blue-500 text-sm"
-                            placeholder="新しい案内項目を入力..."
-                            value={newItemText}
-                            onChange={(e) => setNewItemText(e.target.value)}
-                            autoFocus
-                        />
-                        <div className="flex gap-2 justify-end sm:w-auto">
-                            <button
-                            type="button"
-                            onClick={() => setIsAddingItem(false)}
-                            className="px-5 py-2.5 sm:py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 focus:outline-none"
-                            >
-                            キャンセル
-                            </button>
-                            <button
-                            type="submit"
-                            disabled={!newItemText.trim()}
-                            className="px-5 py-2.5 sm:py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:outline-none disabled:opacity-50"
-                            >
-                            追加
-                            </button>
-                        </div>
-                        </form>
-                    )}
+                                {/* Search & Filter */}
+                                <div className="space-y-3 mb-6">
+                                    <div className="relative">
+                                        <span className="absolute inset-y-0 left-4 flex items-center text-gray-400"><IconSearch /></span>
+                                        <input 
+                                            type="text" 
+                                            placeholder="検索..." 
+                                            className="w-full pl-12 pr-4 py-3 bg-white/50 rounded-2xl border-none focus:ring-2 focus:ring-primary-500 transition-all outline-none text-sm"
+                                            value={searchQuery}
+                                            onChange={e => setSearchQuery(e.target.value)}
+                                        />
+                                    </div>
+                                    <select 
+                                        className="w-full px-4 py-3 bg-white/50 rounded-2xl border-none focus:ring-2 focus:ring-primary-500 transition-all outline-none text-sm appearance-none"
+                                        value={regionFilter}
+                                        onChange={e => setRegionFilter(e.target.value)}
+                                    >
+                                        <option value="">すべての地域</option>
+                                        {regions.map(r => <option key={r} value={r}>{r}</option>)}
+                                    </select>
+                                </div>
+
+                                {/* Nursery Cards */}
+                                <div className="space-y-3 max-h-[500px] overflow-y-auto no-scrollbar pr-1">
+                                    {isAddingNursery && (
+                                        <form onSubmit={handleAddNursery} className="p-4 bg-primary-50 rounded-2xl border border-primary-100 animate-fade-in-down space-y-3">
+                                            <input autoFocus placeholder="保育園名" className="w-full px-4 py-2 rounded-xl border-none text-sm focus:ring-2 focus:ring-primary-500" value={newName} onChange={e => setNewName(e.target.value)} />
+                                            <input placeholder="地域（例：世田谷区）" className="w-full px-4 py-2 rounded-xl border-none text-sm focus:ring-2 focus:ring-primary-500" value={newRegion} onChange={e => setNewRegion(e.target.value)} />
+                                            <button className="w-full py-2 bg-primary-600 text-white rounded-xl text-sm font-bold shadow-md">保存する</button>
+                                        </form>
+                                    )}
+                                    
+                                    {filteredNurseries.map(n => {
+                                        const completed = n.checklist.filter(i => i.completed).length;
+                                        const total = n.checklist.length;
+                                        const percent = total > 0 ? Math.round((completed / total) * 100) : 0;
+                                        
+                                        return (
+                                            <div 
+                                                key={n.id}
+                                                onClick={() => setSelectedId(n.id)}
+                                                className={`p-5 rounded-[1.5rem] cursor-pointer transition-all-custom group border ${selectedId === n.id ? 'bg-primary-600 text-white border-primary-600 premium-shadow scale-[1.02]' : 'bg-white/40 hover:bg-white/80 border-transparent'}`}
+                                            >
+                                                <div className="flex justify-between items-start mb-3">
+                                                    <div>
+                                                        <h3 className="font-bold text-base line-clamp-1">{n.name}</h3>
+                                                        <p className={`text-[11px] font-bold uppercase tracking-wider opacity-60`}>{n.region || 'Unknown'}</p>
+                                                    </div>
+                                                    <button 
+                                                        onClick={(e) => { e.stopPropagation(); handleDeleteNursery(n.id); }}
+                                                        className={`p-1.5 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity ${selectedId === n.id ? 'hover:bg-primary-500 text-white' : 'hover:bg-rose-50 text-rose-400'}`}
+                                                    >
+                                                        <IconTrash />
+                                                    </button>
+                                                </div>
+                                                <div className="flex items-center gap-3">
+                                                    <div className="flex-1 h-1.5 bg-black/10 rounded-full overflow-hidden">
+                                                        <div className={`h-full transition-all duration-500 ${selectedId === n.id ? 'bg-white' : 'bg-primary-500'}`} style={{ width: `${percent}%` }}></div>
+                                                    </div>
+                                                    <span className="text-[11px] font-bold">{percent}%</span>
+                                                </div>
+                                            </div>
+                                        );
+                                    })}
+                                    {filteredNurseries.length === 0 && (
+                                        <div className="py-12 text-center">
+                                            <p className="text-gray-400 text-sm font-medium">保育園が見つかりません</p>
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+                        </aside>
+
+                        {/* Main: Checklist */}
+                        <main className="lg:col-span-8">
+                            {selectedNursery ? (
+                                <div className="space-y-6">
+                                    {/* Stats Header */}
+                                    <div className="glass-card rounded-[2rem] p-8 flex flex-col md:flex-row md:items-center justify-between gap-6 relative overflow-hidden">
+                                        <div className="absolute top-0 right-0 w-32 h-32 bg-primary-100 rounded-full blur-[60px] opacity-40 translate-x-10 -translate-y-10"></div>
+                                        <div className="relative z-10">
+                                            <h2 className="text-2xl font-heading font-bold text-gray-900 mb-1">{selectedNursery.name}</h2>
+                                            <p className="text-primary-600 font-bold text-sm tracking-wide bg-primary-50 px-3 py-1 rounded-full inline-block">
+                                                案内チェックリスト進捗
+                                            </p>
+                                        </div>
+                                        <div className="flex items-center gap-6 relative z-10">
+                                            <div className="text-center">
+                                                <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Items</p>
+                                                <p className="text-2xl font-heading font-bold text-gray-900">
+                                                    {selectedNursery.checklist.filter(i => i.completed).length}<span className="text-gray-300 font-medium mx-1">/</span>{selectedNursery.checklist.length}
+                                                </p>
+                                            </div>
+                                            <div className="w-14 h-14 rounded-full border-4 border-primary-100 flex items-center justify-center">
+                                                <span className="text-sm font-bold text-primary-600">
+                                                    {Math.round((selectedNursery.checklist.filter(i => i.completed).length / selectedNursery.checklist.length) * 100)}%
+                                                </span>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    {/* Checklist Items */}
+                                    <div className="space-y-4">
+                                        {selectedNursery.checklist.map((item, idx) => (
+                                            <div 
+                                                key={item.id} 
+                                                className={`glass-card rounded-3xl p-6 transition-all-custom border-2 ${item.completed ? 'border-primary-100 bg-primary-50/30' : 'border-transparent'}`}
+                                            >
+                                                <div className="flex items-start gap-5">
+                                                    <button 
+                                                        onClick={() => handleToggleItem(item.id)}
+                                                        className={`mt-1 w-8 h-8 rounded-xl flex-shrink-0 flex items-center justify-center transition-all-custom ${item.completed ? 'bg-primary-600 text-white shadow-lg shadow-primary-200' : 'bg-white border-2 border-gray-200 text-transparent hover:border-primary-400'}`}
+                                                    >
+                                                        <IconCheck />
+                                                    </button>
+                                                    <div className="flex-1 min-w-0">
+                                                        <div className="flex justify-between items-start gap-4 mb-4">
+                                                            <h3 
+                                                                onClick={() => handleToggleItem(item.id)}
+                                                                className={`text-lg font-bold cursor-pointer select-none transition-colors ${item.completed ? 'text-gray-400 line-through' : 'text-gray-800'}`}
+                                                            >
+                                                                {item.text}
+                                                            </h3>
+                                                            <button onClick={() => handleDeleteItemGlobal(item.id)} className="p-2 text-gray-300 hover:text-rose-500 transition-colors">
+                                                                <IconTrash />
+                                                            </button>
+                                                        </div>
+                                                        
+                                                        {/* Memo & Dates */}
+                                                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                                            <div className="md:col-span-2">
+                                                                <textarea 
+                                                                    placeholder="メモを残す..."
+                                                                    className="w-full bg-white/60 rounded-2xl p-4 text-sm border-none focus:ring-2 focus:ring-primary-500 transition-all min-h-[80px] no-scrollbar resize-none"
+                                                                    value={item.memo || ""}
+                                                                    onChange={e => handleUpdateItem(item.id, 'memo', e.target.value)}
+                                                                />
+                                                            </div>
+                                                            <div className="space-y-3">
+                                                                <div>
+                                                                    <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest ml-1 mb-1">完了日</label>
+                                                                    <input 
+                                                                        type="date" 
+                                                                        className="w-full bg-white/60 rounded-xl px-3 py-2 text-xs border-none focus:ring-2 focus:ring-primary-500" 
+                                                                        value={item.completedDate || ""} 
+                                                                        onChange={e => handleUpdateItem(item.id, 'completedDate', e.target.value)} 
+                                                                    />
+                                                                </div>
+                                                                <div>
+                                                                    <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest ml-1 mb-1">Next Action</label>
+                                                                    <input 
+                                                                        type="date" 
+                                                                        className="w-full bg-rose-50/50 rounded-xl px-3 py-2 text-xs border-none focus:ring-2 focus:ring-rose-400 text-rose-700" 
+                                                                        value={item.nextActionDate || ""} 
+                                                                        onChange={e => handleUpdateItem(item.id, 'nextActionDate', e.target.value)} 
+                                                                    />
+                                                                </div>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        ))}
+
+                                        {/* Add Item Form */}
+                                        <div className="pt-4">
+                                            <AddItemForm onAdd={handleAddItemGlobal} />
+                                        </div>
+                                    </div>
+                                </div>
+                            ) : (
+                                <div className="h-full min-h-[400px] flex flex-col items-center justify-center glass-card rounded-[2rem] p-12 text-center">
+                                    <div className="w-24 h-24 bg-primary-50 rounded-full flex items-center justify-center mb-6 animate-float">
+                                        <IconSchool />
+                                    </div>
+                                    <h3 className="text-xl font-heading font-bold text-gray-800 mb-2">保育園が選択されていません</h3>
+                                    <p className="text-gray-500 max-w-xs">左側のリストから保育園を選択するか、新しい保育園を追加して管理を始めましょう。</p>
+                                </div>
+                            )}
+                        </main>
                     </div>
-                </section>
-                ) : (
-                <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-10 text-center">
-                    <svg className="w-16 h-16 text-gray-200 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4"></path></svg>
-                    <h3 className="text-lg font-medium text-gray-900">保育園が選択されていません</h3>
-                    <p className="mt-2 text-sm text-gray-500">上部のメニューから対象の保育園を選択するか、<br className="hidden sm:block" />新しく追加してください。</p>
                 </div>
-                )}
-            </main>
-            
-            <style>{`
-                .animate-fade-in-down {
-                animation: fadeInDown 0.25s ease-out;
-                }
-                @keyframes fadeInDown {
-                from { opacity: 0; transform: translateY(-8px); }
-                to { opacity: 1; transform: translateY(0); }
-                }
-            `}</style>
-            </div>
-        );
+            );
+        }
+
+        function AddItemForm({ onAdd }) {
+            const [text, setText] = useState("");
+            const [isExpanded, setIsExpanded] = useState(false);
+
+            const handleSubmit = (e) => {
+                e.preventDefault();
+                onAdd(text);
+                setText("");
+                setIsExpanded(false);
+            };
+
+            if (!isExpanded) return (
+                <button 
+                    onClick={() => setIsExpanded(true)}
+                    className="w-full py-6 border-4 border-dashed border-gray-200 rounded-[2rem] text-gray-400 hover:border-primary-300 hover:text-primary-500 transition-all-custom font-bold text-sm flex items-center justify-center gap-2"
+                >
+                    <IconPlus /> 新しい案内項目を全保育園に追加
+                </button>
+            );
+
+            return (
+                <form onSubmit={handleSubmit} className="glass-card rounded-[2rem] p-6 animate-fade-in-down border-2 border-primary-100">
+                    <h4 className="text-sm font-bold text-gray-800 mb-4">新しいチェック項目を追加</h4>
+                    <div className="flex gap-3">
+                        <input 
+                            autoFocus
+                            placeholder="例：防犯カメラの設置状況を確認" 
+                            className="flex-1 px-5 py-3 rounded-2xl bg-white border-none focus:ring-2 focus:ring-primary-500 outline-none text-sm"
+                            value={text}
+                            onChange={e => setText(e.target.value)}
+                        />
+                        <button type="button" onClick={() => setIsExpanded(false)} className="px-5 py-3 text-gray-500 font-bold text-sm">Cancel</button>
+                        <button disabled={!text.trim()} className="px-6 py-3 bg-primary-600 text-white rounded-2xl font-bold text-sm shadow-md disabled:opacity-50">Add Item</button>
+                    </div>
+                </form>
+            );
         }
 
         const root = ReactDOM.createRoot(document.getElementById('root'));
