@@ -36,12 +36,8 @@
                             500: '#3b66f5',
                             600: '#2546eb',
                             700: '#1d36d8',
+                            800: '#1e3a8a',
                         },
-                        nursery: {
-                            soft: '#FDF2F8',
-                            warm: '#FFFBEB',
-                            cool: '#F0F9FF',
-                        }
                     }
                 }
             }
@@ -85,12 +81,6 @@
             transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
         }
 
-        /* Custom Checkbox */
-        .checkbox-container input:checked ~ .checkmark {
-            background-color: #3b66f5;
-            border-color: #3b66f5;
-        }
-        
         /* Hide scrollbar for Chrome, Safari and Opera */
         .no-scrollbar::-webkit-scrollbar {
             display: none;
@@ -99,6 +89,14 @@
         .no-scrollbar {
             -ms-overflow-style: none;  /* IE and Edge */
             scrollbar-width: none;  /* Firefox */
+        }
+
+        .animate-fade-in-down {
+            animation: fadeInDown 0.3s ease-out forwards;
+        }
+        @keyframes fadeInDown {
+            from { opacity: 0; transform: translateY(-10px); }
+            to { opacity: 1; transform: translateY(0); }
         }
     </style>
 </head>
@@ -109,7 +107,6 @@
         const { useState, useEffect, useMemo } = React;
 
         // --- Firebase Configuration ---
-        // 既存の設定値を保持（ユーザーが環境に合わせて書き換えることを想定）
         const firebaseConfig = {
             apiKey: "AIzaSyCaH8njqfP43PrWvf6e7VHwSrv21t6PUu4",
             authDomain: "hoisapo-pj.firebaseapp.com",
@@ -143,6 +140,8 @@
         const IconSchool = () => <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" /></svg>;
         const IconUser = () => <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" /></svg>;
         const IconLogout = () => <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" /></svg>;
+        const IconGlobe = () => <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9" /></svg>;
+        const IconHome = () => <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" /></svg>;
 
         // --- Components ---
 
@@ -289,7 +288,7 @@
             // Derived State
             const filteredNurseries = useMemo(() => {
                 return nurseries.filter(n => 
-                    n.name.toLowerCase().includes(searchQuery.toLowerCase()) &&
+                    (n.name || "").toLowerCase().includes(searchQuery.toLowerCase()) &&
                     (regionFilter === "" || n.region === regionFilter)
                 );
             }, [nurseries, searchQuery, regionFilter]);
@@ -351,10 +350,17 @@
                 await updateDB(updated);
             };
 
-            const handleAddItemGlobal = async (text) => {
+            // 項目追加（全園 or この園のみ）
+            const handleAddItem = async (text, isGlobal) => {
                 if (!text.trim()) return;
-                const newItem = { id: Date.now().toString(), text, completed: false, memo: "", completedDate: "", nextActionDate: "" };
-                const updated = nurseries.map(n => ({ ...n, checklist: [...n.checklist, newItem] }));
+                const newItem = { id: Date.now().toString(), text: text.trim(), completed: false, memo: "", completedDate: "", nextActionDate: "" };
+                
+                let updated;
+                if (isGlobal) {
+                    updated = nurseries.map(n => ({ ...n, checklist: [...n.checklist, newItem] }));
+                } else {
+                    updated = nurseries.map(n => n.id === selectedId ? { ...n, checklist: [...n.checklist, newItem] } : n);
+                }
                 await updateDB(updated);
             };
 
@@ -441,8 +447,8 @@
                                     )}
                                     
                                     {filteredNurseries.map(n => {
-                                        const completed = n.checklist.filter(i => i.completed).length;
-                                        const total = n.checklist.length;
+                                        const completed = (n.checklist || []).filter(i => i.completed).length;
+                                        const total = (n.checklist || []).length;
                                         const percent = total > 0 ? Math.round((completed / total) * 100) : 0;
                                         
                                         return (
@@ -574,7 +580,7 @@
 
                                         {/* Add Item Form */}
                                         <div className="pt-4">
-                                            <AddItemForm onAdd={handleAddItemGlobal} />
+                                            <AddItemForm onAdd={handleAddItem} />
                                         </div>
                                     </div>
                                 </div>
@@ -597,9 +603,9 @@
             const [text, setText] = useState("");
             const [isExpanded, setIsExpanded] = useState(false);
 
-            const handleSubmit = (e) => {
-                e.preventDefault();
-                onAdd(text);
+            const handleSubmit = (isGlobal) => {
+                if (!text.trim()) return;
+                onAdd(text, isGlobal);
                 setText("");
                 setIsExpanded(false);
             };
@@ -609,25 +615,48 @@
                     onClick={() => setIsExpanded(true)}
                     className="w-full py-6 border-4 border-dashed border-gray-200 rounded-[2rem] text-gray-400 hover:border-primary-300 hover:text-primary-500 transition-all-custom font-bold text-sm flex items-center justify-center gap-2"
                 >
-                    <IconPlus /> 新しい案内項目を全保育園に追加
+                    <IconPlus /> 新しい案内項目を追加
                 </button>
             );
 
             return (
-                <form onSubmit={handleSubmit} className="glass-card rounded-[2rem] p-6 animate-fade-in-down border-2 border-primary-100">
-                    <h4 className="text-sm font-bold text-gray-800 mb-4">新しいチェック項目を追加</h4>
-                    <div className="flex gap-3">
+                <div className="glass-card rounded-[2rem] p-6 animate-fade-in-down border-2 border-primary-100">
+                    <h4 className="text-sm font-bold text-gray-800 mb-4 ml-1">追加する項目名を入力してください</h4>
+                    <div className="space-y-4">
                         <input 
                             autoFocus
                             placeholder="例：防犯カメラの設置状況を確認" 
-                            className="flex-1 px-5 py-3 rounded-2xl bg-white border-none focus:ring-2 focus:ring-primary-500 outline-none text-sm"
+                            className="w-full px-5 py-4 rounded-2xl bg-white border-none focus:ring-2 focus:ring-primary-500 outline-none text-sm shadow-inner"
                             value={text}
                             onChange={e => setText(e.target.value)}
+                            onKeyDown={e => {
+                                if (e.key === 'Enter' && text.trim()) handleSubmit(false);
+                            }}
                         />
-                        <button type="button" onClick={() => setIsExpanded(false)} className="px-5 py-3 text-gray-500 font-bold text-sm">Cancel</button>
-                        <button disabled={!text.trim()} className="px-6 py-3 bg-primary-600 text-white rounded-2xl font-bold text-sm shadow-md disabled:opacity-50">Add Item</button>
+                        <div className="flex flex-col sm:flex-row gap-3">
+                            <button 
+                                onClick={() => handleSubmit(true)}
+                                disabled={!text.trim()}
+                                className="flex-1 flex items-center justify-center gap-2 py-3.5 bg-primary-600 text-white rounded-2xl font-bold text-sm shadow-lg shadow-primary-200 hover:bg-primary-700 transition-all-custom disabled:opacity-50"
+                            >
+                                <IconGlobe /> 全ての園に追加
+                            </button>
+                            <button 
+                                onClick={() => handleSubmit(false)}
+                                disabled={!text.trim()}
+                                className="flex-1 flex items-center justify-center gap-2 py-3.5 bg-white border-2 border-primary-100 text-primary-600 rounded-2xl font-bold text-sm hover:bg-primary-50 transition-all-custom disabled:opacity-50"
+                            >
+                                <IconHome /> この園のみに追加
+                            </button>
+                            <button 
+                                onClick={() => setIsExpanded(false)}
+                                className="px-6 py-3.5 text-gray-400 font-bold text-sm hover:text-gray-600 transition-colors"
+                            >
+                                キャンセル
+                            </button>
+                        </div>
                     </div>
-                </form>
+                </div>
             );
         }
 
