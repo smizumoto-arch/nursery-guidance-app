@@ -17,7 +17,7 @@
     <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore-compat.js"></script>
     <!-- Google Fonts -->
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Outfit:wght@500;600;700&display=swap" rel="stylesheet">
-    
+
     <script>
         tailwind.config = {
             theme: {
@@ -142,7 +142,6 @@
         const IconLogout = () => <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" /></svg>;
         const IconGlobe = () => <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9" /></svg>;
         const IconHome = () => <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" /></svg>;
-        const IconInfo = () => <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>;
 
         // --- Components ---
 
@@ -177,7 +176,7 @@
                 <div className="min-h-screen flex items-center justify-center px-4 relative overflow-hidden">
                     <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] bg-primary-100 rounded-full blur-[100px] opacity-60"></div>
                     <div className="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] bg-rose-100 rounded-full blur-[100px] opacity-60"></div>
-                    
+
                     <div className="max-w-md w-full glass-card rounded-[2rem] p-10 relative z-10 animate-fade-in">
                         <div className="text-center mb-10">
                             <div className="inline-flex items-center justify-center w-20 h-20 bg-primary-500 text-white rounded-3xl premium-shadow mb-6 animate-float">
@@ -229,8 +228,8 @@
                         </form>
 
                         <div className="mt-8 text-center">
-                            <button 
-                                onClick={() => setIsLogin(!isLogin)} 
+                            <button
+                                onClick={() => setIsLogin(!isLogin)}
                                 className="text-primary-600 font-semibold text-sm hover:text-primary-700 transition-colors"
                             >
                                 {isLogin ? "新規登録はこちら" : "ログイン画面に戻る"}
@@ -238,6 +237,43 @@
                         </div>
                     </div>
                 </div>
+            );
+        }
+
+        // [FIX-IME] IMEの中断を防ぐため、メモ欄専用のコンポーネントにローカルstateを持たせる。
+        // compositionEnd/onChange で親にコミットし、外部更新(Firestore)はeffectで同期する。
+        function MemoTextarea({ itemId, value, onCommit, className, placeholder }) {
+            const [localValue, setLocalValue] = useState(value);
+            const isComposing = useRef(false);
+
+            // Firestoreからの外部更新をローカルstateに反映（composition中は無視）
+            useEffect(() => {
+                if (!isComposing.current) {
+                    setLocalValue(value);
+                }
+            }, [value]);
+
+            return (
+                <textarea
+                    placeholder={placeholder}
+                    className={className}
+                    value={localValue}
+                    onCompositionStart={() => { isComposing.current = true; }}
+                    onCompositionEnd={(e) => {
+                        isComposing.current = false;
+                        const v = e.target.value;
+                        setLocalValue(v);
+                        onCommit(itemId, 'memo', v);
+                    }}
+                    onChange={(e) => {
+                        const v = e.target.value;
+                        setLocalValue(v);
+                        // composition中はDBへの反映を行わない（IMEの確定後にonCompositionEndで行う）
+                        if (!isComposing.current) {
+                            onCommit(itemId, 'memo', v);
+                        }
+                    }}
+                />
             );
         }
 
@@ -252,7 +288,18 @@
             const [regionFilter, setRegionFilter] = useState("");
             const [filterStatus, setFilterStatus] = useState("all"); // "all", "completed", "uncompleted"
             const [isAuthChecking, setIsAuthChecking] = useState(true);
-            const isComposing = useRef(false);
+
+            // [FIX-DATA-MIXING] Firestoreスナップショットのコールバックはログイン時のクロージャを
+            // キャプチャするため、selectedId を ref でも管理して常に最新値を参照できるようにする。
+            const selectedIdRef = useRef(selectedId);
+            useEffect(() => {
+                selectedIdRef.current = selectedId;
+            }, [selectedId]);
+
+            // [FIX-UX] 園を切り替えたらフィルターをリセット
+            useEffect(() => {
+                setFilterStatus("all");
+            }, [selectedId]);
 
             // Auth State
             useEffect(() => {
@@ -271,8 +318,9 @@
                     if (doc.exists) {
                         const data = doc.data().nurseries || [];
                         setNurseries(data);
-                        // 初期選択（モバイル等での使い勝手を考慮し、自動選択は初回のみ、またはIDが有効な場合のみにする）
-                        if (!selectedId && data.length > 0 && window.innerWidth >= 1024) {
+                        // [FIX-DATA-MIXING] selectedIdRef.current を使うことで、
+                        // 毎回の書き込み後スナップショットで選択が1番目にリセットされるバグを修正。
+                        if (!selectedIdRef.current && data.length > 0 && window.innerWidth >= 1024) {
                             setSelectedId(data[0].id);
                         }
                     } else {
@@ -297,14 +345,14 @@
 
             // Derived State
             const filteredNurseries = useMemo(() => {
-                return nurseries.filter(n => 
+                return nurseries.filter(n =>
                     (n.name || "").toLowerCase().includes(searchQuery.toLowerCase()) &&
                     (regionFilter === "" || n.region === regionFilter)
                 );
             }, [nurseries, searchQuery, regionFilter]);
 
             const selectedNursery = nurseries.find(n => n.id === selectedId);
-            
+
             const filteredChecklist = useMemo(() => {
                 if (!selectedNursery) return [];
                 return selectedNursery.checklist.filter(item => {
@@ -316,19 +364,20 @@
 
             const regions = Array.from(new Set(nurseries.map(n => n.region).filter(Boolean)));
 
-            // Handlers
+            // [FIX-SIDE-EFFECT] 以下すべてのハンドラで、setNurseries の updater 関数内で
+            // updateDB/setSelectedId を呼ぶ副作用パターンを修正。
+            // updater は純粋関数である必要があり、副作用はその外に出す。
+
             const handleAddNursery = async (e) => {
                 e.preventDefault();
                 if (!newName.trim()) return;
                 const newId = Date.now().toString();
-                const items = nurseries.length > 0 ? nurseries[0].checklist.map(i => ({ ...i, completed: false, memo: "", completedDate: "", nextActionDate: "" })) : defaultItems;
-                
-                setNurseries(prev => {
-                    const updated = [...prev, { id: newId, name: newName, region: newRegion, checklist: items }];
-                    updateDB(updated);
-                    return updated;
-                });
-                
+                const items = nurseries.length > 0
+                    ? nurseries[0].checklist.map(i => ({ ...i, completed: false, memo: "", completedDate: "", nextActionDate: "" }))
+                    : defaultItems;
+                const updated = [...nurseries, { id: newId, name: newName, region: newRegion, checklist: items }];
+                setNurseries(updated);
+                updateDB(updated);
                 setSelectedId(newId);
                 setNewName("");
                 setNewRegion("");
@@ -337,79 +386,66 @@
 
             const handleDeleteNursery = async (id) => {
                 if (!confirm("この保育園のデータを削除しますか？")) return;
-                setNurseries(prev => {
-                    const updated = prev.filter(n => n.id !== id);
-                    updateDB(updated);
-                    if (selectedId === id) setSelectedId(updated.length > 0 ? updated[0].id : "");
-                    return updated;
-                });
+                const updated = nurseries.filter(n => n.id !== id);
+                setNurseries(updated);
+                updateDB(updated);
+                if (selectedId === id) setSelectedId(updated.length > 0 ? updated[0].id : "");
             };
 
-            const handleToggleItem = async (itemId) => {
+            const handleToggleItem = (itemId) => {
                 const today = new Date().toISOString().split('T')[0];
-                setNurseries(prev => {
-                    const updated = prev.map(n => {
-                        if (n.id === selectedId) {
-                            return {
-                                ...n,
-                                checklist: n.checklist.map(item => {
-                                    if (item.id === itemId) {
-                                        const next = !item.completed;
-                                        return { ...item, completed: next, completedDate: next ? today : "" };
-                                    }
-                                    return item;
-                                })
-                            };
-                        }
-                        return n;
-                    });
-                    updateDB(updated);
-                    return updated;
+                const updated = nurseries.map(n => {
+                    if (n.id === selectedId) {
+                        return {
+                            ...n,
+                            checklist: n.checklist.map(item => {
+                                if (item.id === itemId) {
+                                    const next = !item.completed;
+                                    return { ...item, completed: next, completedDate: next ? today : "" };
+                                }
+                                return item;
+                            })
+                        };
+                    }
+                    return n;
                 });
+                setNurseries(updated);
+                updateDB(updated);
             };
 
-            const handleUpdateItem = async (itemId, field, value, skipSync = false) => {
-                setNurseries(prev => {
-                    const updated = prev.map(n => {
-                        if (n.id === selectedId) {
-                            return {
-                                ...n,
-                                checklist: n.checklist.map(item => item.id === itemId ? { ...item, [field]: value } : item)
-                            };
-                        }
-                        return n;
-                    });
-                    if (!skipSync) {
-                        updateDB(updated);
+            const handleUpdateItem = (itemId, field, value) => {
+                const updated = nurseries.map(n => {
+                    if (n.id === selectedId) {
+                        return {
+                            ...n,
+                            checklist: n.checklist.map(item => item.id === itemId ? { ...item, [field]: value } : item)
+                        };
                     }
-                    return updated;
+                    return n;
                 });
+                setNurseries(updated);
+                updateDB(updated);
             };
 
             // 項目追加（全園 or この園のみ）
-            const handleAddItem = async (text, isGlobal) => {
+            const handleAddItem = (text, isGlobal) => {
                 if (!text.trim()) return;
                 const newItem = { id: Date.now().toString(), text: text.trim(), completed: false, memo: "", completedDate: "", nextActionDate: "" };
-                
-                setNurseries(prev => {
-                    let updated;
-                    if (isGlobal) {
-                        updated = prev.map(n => ({ ...n, checklist: [...n.checklist, newItem] }));
-                    } else {
-                        updated = prev.map(n => n.id === selectedId ? { ...n, checklist: [...n.checklist, newItem] } : n);
-                    }
-                    updateDB(updated);
-                    return updated;
-                });
+                let updated;
+                if (isGlobal) {
+                    updated = nurseries.map(n => ({ ...n, checklist: [...n.checklist, newItem] }));
+                } else {
+                    updated = nurseries.map(n => n.id === selectedId ? { ...n, checklist: [...n.checklist, newItem] } : n);
+                }
+                setNurseries(updated);
+                updateDB(updated);
             };
 
             const handleDeleteItemGlobal = async (itemId) => {
                 if (!confirm("すべての園からこの項目を削除しますか？")) return;
-                setNurseries(prev => {
-                    const updated = prev.map(n => ({ ...n, checklist: n.checklist.filter(i => i.id !== itemId) }));
-                    updateDB(updated);
-                    return updated;
-                });
+                const updated = nurseries.map(n => ({ ...n, checklist: n.checklist.filter(i => i.id !== itemId) }));
+                setNurseries(updated);
+                updateDB(updated);
             };
 
             if (isAuthChecking) return (
@@ -418,6 +454,11 @@
                 </div>
             );
             if (!user) return <LoginView />;
+
+            // [FIX-DIV-ZERO] チェックリストが0件のとき NaN% になるのを防ぐ
+            const statsTotal = selectedNursery ? selectedNursery.checklist.length : 0;
+            const statsCompleted = selectedNursery ? selectedNursery.checklist.filter(i => i.completed).length : 0;
+            const statsPercent = statsTotal > 0 ? Math.round((statsCompleted / statsTotal) * 100) : 0;
 
             return (
                 <div className="max-w-5xl mx-auto px-4 py-8 md:py-12">
@@ -448,7 +489,7 @@
                             <div className="glass-card rounded-[2rem] p-6">
                                 <div className="flex items-center justify-between mb-6">
                                     <h2 className="text-lg font-heading font-bold text-gray-800">保育園リスト</h2>
-                                    <button 
+                                    <button
                                         onClick={() => setIsAddingNursery(!isAddingNursery)}
                                         className={`p-2 rounded-xl transition-all-custom ${isAddingNursery ? 'bg-rose-100 text-rose-600 rotate-45' : 'bg-primary-100 text-primary-600 hover:scale-110'}`}
                                     >
@@ -460,15 +501,15 @@
                                 <div className="space-y-3 mb-6">
                                     <div className="relative">
                                         <span className="absolute inset-y-0 left-4 flex items-center text-gray-400"><IconSearch /></span>
-                                        <input 
-                                            type="text" 
-                                            placeholder="検索..." 
+                                        <input
+                                            type="text"
+                                            placeholder="検索..."
                                             className="w-full pl-12 pr-4 py-3 bg-white/50 rounded-2xl border-none focus:ring-2 focus:ring-primary-500 transition-all outline-none text-sm"
                                             value={searchQuery}
                                             onChange={e => setSearchQuery(e.target.value)}
                                         />
                                     </div>
-                                    <select 
+                                    <select
                                         className="w-full px-4 py-3 bg-white/50 rounded-2xl border-none focus:ring-2 focus:ring-primary-500 transition-all outline-none text-sm appearance-none"
                                         value={regionFilter}
                                         onChange={e => setRegionFilter(e.target.value)}
@@ -487,14 +528,14 @@
                                             <button className="w-full py-2 bg-primary-600 text-white rounded-xl text-sm font-bold shadow-md">保存する</button>
                                         </form>
                                     )}
-                                    
+
                                     {filteredNurseries.map(n => {
                                         const completed = (n.checklist || []).filter(i => i.completed).length;
                                         const total = (n.checklist || []).length;
                                         const percent = total > 0 ? Math.round((completed / total) * 100) : 0;
-                                        
+
                                         return (
-                                            <div 
+                                            <div
                                                 key={n.id}
                                                 onClick={() => setSelectedId(n.id)}
                                                 className={`p-5 rounded-[1.5rem] cursor-pointer transition-all-custom group border ${selectedId === n.id ? 'bg-primary-600 text-white border-primary-600 premium-shadow scale-[1.02]' : 'bg-white/40 hover:bg-white/80 border-transparent'}`}
@@ -504,7 +545,7 @@
                                                         <h3 className="font-bold text-base line-clamp-1">{n.name}</h3>
                                                         <p className={`text-[11px] font-bold uppercase tracking-wider opacity-60`}>{n.region || 'Unknown'}</p>
                                                     </div>
-                                                    <button 
+                                                    <button
                                                         onClick={(e) => { e.stopPropagation(); handleDeleteNursery(n.id); }}
                                                         className={`p-1.5 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity ${selectedId === n.id ? 'hover:bg-primary-500 text-white' : 'hover:bg-rose-50 text-rose-400'}`}
                                                     >
@@ -534,7 +575,7 @@
                             {selectedNursery ? (
                                 <div className="space-y-6">
                                     {/* Back Button (Mobile Only) */}
-                                    <button 
+                                    <button
                                         onClick={() => setSelectedId("")}
                                         className="lg:hidden flex items-center gap-2 text-primary-600 font-bold text-sm mb-2 hover:translate-x-[-4px] transition-transform"
                                     >
@@ -555,12 +596,12 @@
                                             <div className="text-center">
                                                 <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Items</p>
                                                 <p className="text-2xl font-heading font-bold text-gray-900">
-                                                    {selectedNursery.checklist.filter(i => i.completed).length}<span className="text-gray-300 font-medium mx-1">/</span>{selectedNursery.checklist.length}
+                                                    {statsCompleted}<span className="text-gray-300 font-medium mx-1">/</span>{statsTotal}
                                                 </p>
                                             </div>
                                             <div className="w-14 h-14 rounded-full border-4 border-primary-100 flex items-center justify-center">
                                                 <span className="text-sm font-bold text-primary-600">
-                                                    {Math.round((selectedNursery.checklist.filter(i => i.completed).length / selectedNursery.checklist.length) * 100)}%
+                                                    {statsPercent}%
                                                 </span>
                                             </div>
                                         </div>
@@ -585,13 +626,13 @@
 
                                     {/* Checklist Items */}
                                     <div className="space-y-4">
-                                        {filteredChecklist.map((item, idx) => (
-                                            <div 
-                                                key={item.id} 
+                                        {filteredChecklist.map((item) => (
+                                            <div
+                                                key={item.id}
                                                 className={`glass-card rounded-3xl p-6 transition-all-custom border-2 ${item.completed ? 'border-primary-100 bg-primary-50/30' : 'border-transparent'}`}
                                             >
                                                 <div className="flex items-start gap-5">
-                                                    <button 
+                                                    <button
                                                         onClick={() => handleToggleItem(item.id)}
                                                         className={`mt-1 w-8 h-8 rounded-xl flex-shrink-0 flex items-center justify-center transition-all-custom ${item.completed ? 'bg-primary-600 text-white shadow-lg shadow-primary-200' : 'bg-white border-2 border-gray-200 text-transparent hover:border-primary-400'}`}
                                                     >
@@ -599,22 +640,22 @@
                                                     </button>
                                                     <div className="flex-1 min-w-0">
                                                             <div className="flex-1 flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-4">
-                                                                <h3 
+                                                                <h3
                                                                     onClick={() => handleToggleItem(item.id)}
                                                                     className={`text-lg font-bold cursor-pointer select-none transition-colors ${item.completed ? 'text-gray-400 line-through' : 'text-gray-800'}`}
                                                                 >
                                                                     {item.text}
                                                                 </h3>
-                                                                
+
                                                                 <div className="flex items-center gap-2">
                                                                     <div className="flex items-center bg-gray-100/50 p-1 rounded-xl border border-gray-200/50">
-                                                                        <button 
+                                                                        <button
                                                                             onClick={() => handleUpdateItem(item.id, 'status', item.status === 'adopted' ? null : 'adopted')}
                                                                             className={`px-3 py-1.5 rounded-lg text-[10px] font-bold transition-all ${item.status === 'adopted' ? 'bg-primary-600 text-white shadow-md shadow-primary-200' : 'text-gray-400 hover:text-primary-600'}`}
                                                                         >
                                                                             導入済み
                                                                         </button>
-                                                                        <button 
+                                                                        <button
                                                                             onClick={() => handleUpdateItem(item.id, 'status', item.status === 'not_adopted' ? null : 'not_adopted')}
                                                                             className={`px-3 py-1.5 rounded-lg text-[10px] font-bold transition-all ${item.status === 'not_adopted' ? 'bg-rose-500 text-white shadow-md shadow-rose-200' : 'text-gray-400 hover:text-rose-500'}`}
                                                                         >
@@ -626,39 +667,35 @@
                                                                     </button>
                                                                 </div>
                                                             </div>
-                                                        
+
                                                         {/* Memo & Dates */}
                                                         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                                                             <div className="md:col-span-2">
-                                                                    <textarea 
-                                                                        placeholder="メモを残す..."
-                                                                        className="w-full bg-white/60 rounded-2xl p-4 text-sm border-none focus:ring-2 focus:ring-primary-500 transition-all min-h-[80px] no-scrollbar resize-none"
-                                                                        value={item.memo || ""}
-                                                                        onCompositionStart={() => isComposing.current = true}
-                                                                        onCompositionEnd={(e) => {
-                                                                            isComposing.current = false;
-                                                                            handleUpdateItem(item.id, 'memo', e.target.value);
-                                                                        }}
-                                                                        onChange={e => handleUpdateItem(item.id, 'memo', e.target.value, isComposing.current)}
-                                                                    />
+                                                                <MemoTextarea
+                                                                    itemId={item.id}
+                                                                    value={item.memo || ""}
+                                                                    onCommit={handleUpdateItem}
+                                                                    placeholder="メモを残す..."
+                                                                    className="w-full bg-white/60 rounded-2xl p-4 text-sm border-none focus:ring-2 focus:ring-primary-500 transition-all min-h-[80px] no-scrollbar resize-none"
+                                                                />
                                                             </div>
                                                             <div className="space-y-3">
                                                                 <div>
                                                                     <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest ml-1 mb-1">完了日</label>
-                                                                    <input 
-                                                                        type="date" 
-                                                                        className="w-full bg-white/60 rounded-xl px-3 py-2 text-xs border-none focus:ring-2 focus:ring-primary-500" 
-                                                                        value={item.completedDate || ""} 
-                                                                        onChange={e => handleUpdateItem(item.id, 'completedDate', e.target.value)} 
+                                                                    <input
+                                                                        type="date"
+                                                                        className="w-full bg-white/60 rounded-xl px-3 py-2 text-xs border-none focus:ring-2 focus:ring-primary-500"
+                                                                        value={item.completedDate || ""}
+                                                                        onChange={e => handleUpdateItem(item.id, 'completedDate', e.target.value)}
                                                                     />
                                                                 </div>
                                                                 <div>
                                                                     <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest ml-1 mb-1">Next Action</label>
-                                                                    <input 
-                                                                        type="date" 
-                                                                        className="w-full bg-rose-50/50 rounded-xl px-3 py-2 text-xs border-none focus:ring-2 focus:ring-rose-400 text-rose-700" 
-                                                                        value={item.nextActionDate || ""} 
-                                                                        onChange={e => handleUpdateItem(item.id, 'nextActionDate', e.target.value)} 
+                                                                    <input
+                                                                        type="date"
+                                                                        className="w-full bg-rose-50/50 rounded-xl px-3 py-2 text-xs border-none focus:ring-2 focus:ring-rose-400 text-rose-700"
+                                                                        value={item.nextActionDate || ""}
+                                                                        onChange={e => handleUpdateItem(item.id, 'nextActionDate', e.target.value)}
                                                                     />
                                                                 </div>
                                                             </div>
@@ -707,7 +744,7 @@
             };
 
             if (!isExpanded) return (
-                <button 
+                <button
                     onClick={() => setIsExpanded(true)}
                     className="w-full py-6 border-4 border-dashed border-gray-200 rounded-[2rem] text-gray-400 hover:border-primary-300 hover:text-primary-500 transition-all-custom font-bold text-sm flex items-center justify-center gap-2"
                 >
@@ -725,9 +762,9 @@
                     <div className="space-y-6">
                         <div>
                             <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest ml-1 mb-2">項目名</label>
-                            <input 
+                            <input
                                 autoFocus
-                                placeholder="例：防犯カメラの設置状況を確認" 
+                                placeholder="例：防犯カメラの設置状況を確認"
                                 className="w-full px-5 py-4 rounded-2xl bg-white border-2 border-gray-100 focus:border-primary-500 focus:ring-0 outline-none text-sm transition-all"
                                 value={text}
                                 onChange={e => setText(e.target.value)}
@@ -736,11 +773,11 @@
                                 }}
                             />
                         </div>
-                        
+
                         <div className="space-y-3">
                             <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest ml-1">追加先の範囲を選択</label>
                             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                                <button 
+                                <button
                                     onClick={() => handleSubmit(true)}
                                     disabled={!text.trim()}
                                     className="group flex items-center gap-4 p-4 bg-white border-2 border-gray-100 rounded-2xl text-left hover:border-primary-500 transition-all disabled:opacity-50"
@@ -753,7 +790,7 @@
                                         <p className="text-[10px] text-gray-400">共通のチェック項目として登録</p>
                                     </div>
                                 </button>
-                                <button 
+                                <button
                                     onClick={() => handleSubmit(false)}
                                     disabled={!text.trim()}
                                     className="group flex items-center gap-4 p-4 bg-white border-2 border-gray-100 rounded-2xl text-left hover:border-primary-500 transition-all disabled:opacity-50"
@@ -770,7 +807,7 @@
                         </div>
 
                         <div className="flex justify-end pt-2">
-                            <button 
+                            <button
                                 onClick={() => setIsExpanded(false)}
                                 className="px-6 py-3 text-gray-400 font-bold text-sm hover:text-gray-600 transition-colors"
                             >
