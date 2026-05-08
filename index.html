@@ -250,9 +250,9 @@
             const [newRegion, setNewRegion] = useState("");
             const [searchQuery, setSearchQuery] = useState("");
             const [regionFilter, setRegionFilter] = useState("");
+            const [filterStatus, setFilterStatus] = useState("all"); // "all", "completed", "uncompleted"
             const [isAuthChecking, setIsAuthChecking] = useState(true);
             const isComposing = useRef(false);
-
 
             // Auth State
             useEffect(() => {
@@ -271,7 +271,10 @@
                     if (doc.exists) {
                         const data = doc.data().nurseries || [];
                         setNurseries(data);
-                        if (!selectedId && data.length > 0) setSelectedId(data[0].id);
+                        // 初期選択（モバイル等での使い勝手を考慮し、自動選択は初回のみ、またはIDが有効な場合のみにする）
+                        if (!selectedId && data.length > 0 && window.innerWidth >= 1024) {
+                            setSelectedId(data[0].id);
+                        }
                     } else {
                         // 初回移行
                         const localData = localStorage.getItem("nurseryGuidanceData");
@@ -285,7 +288,11 @@
 
             const updateDB = async (newData) => {
                 if (!user) return;
-                await db.collection('users').doc(user.uid).set({ nurseries: newData }, { merge: true });
+                try {
+                    await db.collection('users').doc(user.uid).set({ nurseries: newData }, { merge: true });
+                } catch (error) {
+                    console.error("Firestore update error:", error);
+                }
             };
 
             // Derived State
@@ -297,6 +304,16 @@
             }, [nurseries, searchQuery, regionFilter]);
 
             const selectedNursery = nurseries.find(n => n.id === selectedId);
+            
+            const filteredChecklist = useMemo(() => {
+                if (!selectedNursery) return [];
+                return selectedNursery.checklist.filter(item => {
+                    if (filterStatus === "completed") return item.completed;
+                    if (filterStatus === "uncompleted") return !item.completed;
+                    return true;
+                });
+            }, [selectedNursery, filterStatus]);
+
             const regions = Array.from(new Set(nurseries.map(n => n.region).filter(Boolean)));
 
             // Handlers
@@ -305,8 +322,13 @@
                 if (!newName.trim()) return;
                 const newId = Date.now().toString();
                 const items = nurseries.length > 0 ? nurseries[0].checklist.map(i => ({ ...i, completed: false, memo: "", completedDate: "", nextActionDate: "" })) : defaultItems;
-                const updated = [...nurseries, { id: newId, name: newName, region: newRegion, checklist: items }];
-                await updateDB(updated);
+                
+                setNurseries(prev => {
+                    const updated = [...prev, { id: newId, name: newName, region: newRegion, checklist: items }];
+                    updateDB(updated);
+                    return updated;
+                });
+                
                 setSelectedId(newId);
                 setNewName("");
                 setNewRegion("");
@@ -315,45 +337,53 @@
 
             const handleDeleteNursery = async (id) => {
                 if (!confirm("この保育園のデータを削除しますか？")) return;
-                const updated = nurseries.filter(n => n.id !== id);
-                await updateDB(updated);
-                if (selectedId === id) setSelectedId(updated.length > 0 ? updated[0].id : "");
+                setNurseries(prev => {
+                    const updated = prev.filter(n => n.id !== id);
+                    updateDB(updated);
+                    if (selectedId === id) setSelectedId(updated.length > 0 ? updated[0].id : "");
+                    return updated;
+                });
             };
 
             const handleToggleItem = async (itemId) => {
                 const today = new Date().toISOString().split('T')[0];
-                const updated = nurseries.map(n => {
-                    if (n.id === selectedId) {
-                        return {
-                            ...n,
-                            checklist: n.checklist.map(item => {
-                                if (item.id === itemId) {
-                                    const next = !item.completed;
-                                    return { ...item, completed: next, completedDate: next ? today : "" };
-                                }
-                                return item;
-                            })
-                        };
-                    }
-                    return n;
+                setNurseries(prev => {
+                    const updated = prev.map(n => {
+                        if (n.id === selectedId) {
+                            return {
+                                ...n,
+                                checklist: n.checklist.map(item => {
+                                    if (item.id === itemId) {
+                                        const next = !item.completed;
+                                        return { ...item, completed: next, completedDate: next ? today : "" };
+                                    }
+                                    return item;
+                                })
+                            };
+                        }
+                        return n;
+                    });
+                    updateDB(updated);
+                    return updated;
                 });
-                await updateDB(updated);
             };
 
             const handleUpdateItem = async (itemId, field, value, skipSync = false) => {
-                const updated = nurseries.map(n => {
-                    if (n.id === selectedId) {
-                        return {
-                            ...n,
-                            checklist: n.checklist.map(item => item.id === itemId ? { ...item, [field]: value } : item)
-                        };
+                setNurseries(prev => {
+                    const updated = prev.map(n => {
+                        if (n.id === selectedId) {
+                            return {
+                                ...n,
+                                checklist: n.checklist.map(item => item.id === itemId ? { ...item, [field]: value } : item)
+                            };
+                        }
+                        return n;
+                    });
+                    if (!skipSync) {
+                        updateDB(updated);
                     }
-                    return n;
+                    return updated;
                 });
-                setNurseries(updated);
-                if (!skipSync) {
-                    await updateDB(updated);
-                }
             };
 
             // 項目追加（全園 or この園のみ）
@@ -361,18 +391,25 @@
                 if (!text.trim()) return;
                 const newItem = { id: Date.now().toString(), text: text.trim(), completed: false, memo: "", completedDate: "", nextActionDate: "" };
                 
-                let updated;
-                if (isGlobal) {
-                    updated = nurseries.map(n => ({ ...n, checklist: [...n.checklist, newItem] }));
-                } else {
-                    updated = nurseries.map(n => n.id === selectedId ? { ...n, checklist: [...n.checklist, newItem] } : n);
-                }
-                await updateDB(updated);
+                setNurseries(prev => {
+                    let updated;
+                    if (isGlobal) {
+                        updated = prev.map(n => ({ ...n, checklist: [...n.checklist, newItem] }));
+                    } else {
+                        updated = prev.map(n => n.id === selectedId ? { ...n, checklist: [...n.checklist, newItem] } : n);
+                    }
+                    updateDB(updated);
+                    return updated;
+                });
             };
 
             const handleDeleteItemGlobal = async (itemId) => {
-                const updated = nurseries.map(n => ({ ...n, checklist: n.checklist.filter(i => i.id !== itemId) }));
-                await updateDB(updated);
+                if (!confirm("すべての園からこの項目を削除しますか？")) return;
+                setNurseries(prev => {
+                    const updated = prev.map(n => ({ ...n, checklist: n.checklist.filter(i => i.id !== itemId) }));
+                    updateDB(updated);
+                    return updated;
+                });
             };
 
             if (isAuthChecking) return (
@@ -407,7 +444,7 @@
 
                     <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
                         {/* Sidebar: Nursery List */}
-                        <aside className="lg:col-span-4 space-y-6">
+                        <aside className={`lg:col-span-4 space-y-6 ${selectedId ? 'hidden lg:block' : 'block'}`}>
                             <div className="glass-card rounded-[2rem] p-6">
                                 <div className="flex items-center justify-between mb-6">
                                     <h2 className="text-lg font-heading font-bold text-gray-800">保育園リスト</h2>
@@ -493,9 +530,18 @@
                         </aside>
 
                         {/* Main: Checklist */}
-                        <main className="lg:col-span-8">
+                        <main className={`lg:col-span-8 ${selectedId ? 'block' : 'hidden lg:block'}`}>
                             {selectedNursery ? (
                                 <div className="space-y-6">
+                                    {/* Back Button (Mobile Only) */}
+                                    <button 
+                                        onClick={() => setSelectedId("")}
+                                        className="lg:hidden flex items-center gap-2 text-primary-600 font-bold text-sm mb-2 hover:translate-x-[-4px] transition-transform"
+                                    >
+                                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M15 19l-7-7 7-7" /></svg>
+                                        リストに戻る
+                                    </button>
+
                                     {/* Stats Header */}
                                     <div className="glass-card rounded-[2rem] p-8 flex flex-col md:flex-row md:items-center justify-between gap-6 relative overflow-hidden">
                                         <div className="absolute top-0 right-0 w-32 h-32 bg-primary-100 rounded-full blur-[60px] opacity-40 translate-x-10 -translate-y-10"></div>
@@ -520,9 +566,26 @@
                                         </div>
                                     </div>
 
+                                    {/* Filter Tabs */}
+                                    <div className="flex p-1.5 bg-white/40 backdrop-blur-md rounded-2xl border border-white/40 premium-shadow">
+                                        {[
+                                            { id: 'all', label: 'すべて表示' },
+                                            { id: 'completed', label: '完了のみ' },
+                                            { id: 'uncompleted', label: '未完了のみ' }
+                                        ].map(tab => (
+                                            <button
+                                                key={tab.id}
+                                                onClick={() => setFilterStatus(tab.id)}
+                                                className={`flex-1 py-2.5 px-4 rounded-xl text-xs font-bold transition-all-custom ${filterStatus === tab.id ? 'bg-white text-primary-600 shadow-sm' : 'text-gray-400 hover:text-gray-600'}`}
+                                            >
+                                                {tab.label}
+                                            </button>
+                                        ))}
+                                    </div>
+
                                     {/* Checklist Items */}
                                     <div className="space-y-4">
-                                        {selectedNursery.checklist.map((item, idx) => (
+                                        {filteredChecklist.map((item, idx) => (
                                             <div 
                                                 key={item.id} 
                                                 className={`glass-card rounded-3xl p-6 transition-all-custom border-2 ${item.completed ? 'border-primary-100 bg-primary-50/30' : 'border-transparent'}`}
@@ -604,6 +667,12 @@
                                                 </div>
                                             </div>
                                         ))}
+
+                                        {filteredChecklist.length === 0 && (
+                                            <div className="py-12 text-center glass-card rounded-3xl border-dashed border-2 border-gray-200">
+                                                <p className="text-gray-400 text-sm font-medium">表示する項目がありません</p>
+                                            </div>
+                                        )}
 
                                         {/* Add Item Form */}
                                         <div className="pt-4">
