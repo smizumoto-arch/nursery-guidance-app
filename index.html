@@ -142,6 +142,7 @@
         const IconLogout = () => <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" /></svg>;
         const IconGlobe = () => <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9" /></svg>;
         const IconHome = () => <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" /></svg>;
+        const IconEdit = () => <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L12 15l-4 1 1-4 8.586-8.586z" /></svg>;
 
         // --- Components ---
 
@@ -284,10 +285,15 @@
             const [isAddingNursery, setIsAddingNursery] = useState(false);
             const [newName, setNewName] = useState("");
             const [newRegion, setNewRegion] = useState("");
+            const [newFurigana, setNewFurigana] = useState("");
             const [searchQuery, setSearchQuery] = useState("");
             const [regionFilter, setRegionFilter] = useState("");
             const [filterStatus, setFilterStatus] = useState("all"); // "all", "completed", "uncompleted"
             const [isAuthChecking, setIsAuthChecking] = useState(true);
+            const [editingNurseryId, setEditingNurseryId] = useState("");
+            const [editName, setEditName] = useState("");
+            const [editRegion, setEditRegion] = useState("");
+            const [editFurigana, setEditFurigana] = useState("");
 
             // [FIX-DATA-MIXING] Firestoreスナップショットのコールバックはログイン時のクロージャを
             // キャプチャするため、selectedId を ref でも管理して常に最新値を参照できるようにする。
@@ -337,18 +343,31 @@
             const updateDB = async (newData) => {
                 if (!user) return;
                 try {
-                    await db.collection('users').doc(user.uid).set({ nurseries: newData }, { merge: true });
+                    await db.collection('users').doc(user.uid).update({ nurseries: newData });
                 } catch (error) {
-                    console.error("Firestore update error:", error);
+                    // 初回作成前など update が失敗するケースに備えて set でフォールバック
+                    if (error && error.code === "not-found") {
+                        await db.collection('users').doc(user.uid).set({ nurseries: newData }, { merge: true });
+                    } else {
+                        console.error("Firestore update error:", error);
+                    }
                 }
             };
 
             // Derived State
             const filteredNurseries = useMemo(() => {
-                return nurseries.filter(n =>
-                    (n.name || "").toLowerCase().includes(searchQuery.toLowerCase()) &&
-                    (regionFilter === "" || n.region === regionFilter)
-                );
+                const getSortKey = (nursery) => {
+                    return (nursery.furigana || nursery.reading || nursery.kana || nursery.name || "").trim();
+                };
+
+                return nurseries
+                    .filter(n =>
+                        (n.name || "").toLowerCase().includes(searchQuery.toLowerCase()) &&
+                        (regionFilter === "" || n.region === regionFilter)
+                    )
+                    .sort((a, b) =>
+                        getSortKey(a).localeCompare(getSortKey(b), "ja", { sensitivity: "base" })
+                    );
             }, [nurseries, searchQuery, regionFilter]);
 
             const selectedNursery = nurseries.find(n => n.id === selectedId);
@@ -363,6 +382,7 @@
             }, [selectedNursery, filterStatus]);
 
             const regions = Array.from(new Set(nurseries.map(n => n.region).filter(Boolean)));
+            const isHiragana = (value) => /^[\u3041-\u3096\u30fc\s]+$/.test((value || "").trim());
 
             // [FIX-SIDE-EFFECT] 以下すべてのハンドラで、setNurseries の updater 関数内で
             // updateDB/setSelectedId を呼ぶ副作用パターンを修正。
@@ -371,17 +391,63 @@
             const handleAddNursery = async (e) => {
                 e.preventDefault();
                 if (!newName.trim()) return;
+                if (!newFurigana.trim() || !isHiragana(newFurigana)) {
+                    alert("フリガナは全角ひらがなで入力してください。");
+                    return;
+                }
                 const newId = Date.now().toString();
                 const items = nurseries.length > 0
                     ? nurseries[0].checklist.map(i => ({ ...i, completed: false, memo: "", completedDate: "", nextActionDate: "" }))
                     : defaultItems;
-                const updated = [...nurseries, { id: newId, name: newName, region: newRegion, checklist: items }];
+                const updated = [...nurseries, { id: newId, name: newName.trim(), region: newRegion.trim(), furigana: newFurigana.trim(), checklist: items }];
                 setNurseries(updated);
                 updateDB(updated);
                 setSelectedId(newId);
                 setNewName("");
                 setNewRegion("");
+                setNewFurigana("");
                 setIsAddingNursery(false);
+            };
+
+            const openEditNursery = (nursery) => {
+                setEditingNurseryId(nursery.id);
+                setEditName(nursery.name || "");
+                setEditRegion(nursery.region || "");
+                setEditFurigana(nursery.furigana || "");
+            };
+
+            const closeEditNursery = () => {
+                setEditingNurseryId("");
+                setEditName("");
+                setEditRegion("");
+                setEditFurigana("");
+            };
+
+            const handleSaveNurseryEdit = async (e) => {
+                e.preventDefault();
+                if (!editingNurseryId) return;
+                if (!editName.trim()) {
+                    alert("園名を入力してください。");
+                    return;
+                }
+                if (!editFurigana.trim() || !isHiragana(editFurigana)) {
+                    alert("フリガナは全角ひらがなで入力してください。");
+                    return;
+                }
+
+                const updated = nurseries.map(n =>
+                    n.id === editingNurseryId
+                        ? {
+                            ...n,
+                            name: editName.trim(),
+                            region: editRegion.trim(),
+                            furigana: editFurigana.trim()
+                        }
+                        : n
+                );
+                setNurseries(updated);
+                await updateDB(updated);
+                closeEditNursery();
             };
 
             const handleDeleteNursery = async (id) => {
@@ -525,6 +591,7 @@
                                         <form onSubmit={handleAddNursery} className="p-4 bg-primary-50 rounded-2xl border border-primary-100 animate-fade-in-down space-y-3">
                                             <input autoFocus placeholder="保育園名" className="w-full px-4 py-2 rounded-xl border-none text-sm focus:ring-2 focus:ring-primary-500" value={newName} onChange={e => setNewName(e.target.value)} />
                                             <input placeholder="地域（例：世田谷区）" className="w-full px-4 py-2 rounded-xl border-none text-sm focus:ring-2 focus:ring-primary-500" value={newRegion} onChange={e => setNewRegion(e.target.value)} />
+                                            <input placeholder="フリガナ（ひらがな）" className="w-full px-4 py-2 rounded-xl border-none text-sm focus:ring-2 focus:ring-primary-500" value={newFurigana} onChange={e => setNewFurigana(e.target.value)} />
                                             <button className="w-full py-2 bg-primary-600 text-white rounded-xl text-sm font-bold shadow-md">保存する</button>
                                         </form>
                                     )}
@@ -543,14 +610,23 @@
                                                 <div className="flex justify-between items-start mb-3">
                                                     <div>
                                                         <h3 className="font-bold text-base line-clamp-1">{n.name}</h3>
+                                                        <p className={`text-[11px] opacity-60`}>{n.furigana || "ふりがな未設定"}</p>
                                                         <p className={`text-[11px] font-bold uppercase tracking-wider opacity-60`}>{n.region || 'Unknown'}</p>
                                                     </div>
-                                                    <button
-                                                        onClick={(e) => { e.stopPropagation(); handleDeleteNursery(n.id); }}
-                                                        className={`p-1.5 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity ${selectedId === n.id ? 'hover:bg-primary-500 text-white' : 'hover:bg-rose-50 text-rose-400'}`}
-                                                    >
-                                                        <IconTrash />
-                                                    </button>
+                                                    <div className="flex items-center gap-1">
+                                                        <button
+                                                            onClick={(e) => { e.stopPropagation(); openEditNursery(n); }}
+                                                            className={`p-1.5 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity ${selectedId === n.id ? 'hover:bg-primary-500 text-white' : 'hover:bg-primary-50 text-primary-500'}`}
+                                                        >
+                                                            <IconEdit />
+                                                        </button>
+                                                        <button
+                                                            onClick={(e) => { e.stopPropagation(); handleDeleteNursery(n.id); }}
+                                                            className={`p-1.5 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity ${selectedId === n.id ? 'hover:bg-primary-500 text-white' : 'hover:bg-rose-50 text-rose-400'}`}
+                                                        >
+                                                            <IconTrash />
+                                                        </button>
+                                                    </div>
                                                 </div>
                                                 <div className="flex items-center gap-3">
                                                     <div className="flex-1 h-1.5 bg-black/10 rounded-full overflow-hidden">
@@ -728,6 +804,33 @@
                             )}
                         </main>
                     </div>
+
+                    {editingNurseryId && (
+                        <div className="fixed inset-0 z-50 bg-black/30 backdrop-blur-sm flex items-center justify-center px-4">
+                            <form onSubmit={handleSaveNurseryEdit} className="w-full max-w-md glass-card rounded-[2rem] p-6 space-y-4 border border-white/60">
+                                <div className="flex items-center justify-between">
+                                    <h3 className="text-lg font-heading font-bold text-gray-800">園情報を編集</h3>
+                                    <button type="button" onClick={closeEditNursery} className="px-3 py-1 text-sm text-gray-500 hover:text-gray-700">閉じる</button>
+                                </div>
+                                <div>
+                                    <label className="block text-xs font-bold text-gray-500 mb-1">園名</label>
+                                    <input className="w-full px-4 py-2 rounded-xl bg-white/70 border-none focus:ring-2 focus:ring-primary-500 text-sm" value={editName} onChange={e => setEditName(e.target.value)} />
+                                </div>
+                                <div>
+                                    <label className="block text-xs font-bold text-gray-500 mb-1">地域</label>
+                                    <input className="w-full px-4 py-2 rounded-xl bg-white/70 border-none focus:ring-2 focus:ring-primary-500 text-sm" value={editRegion} onChange={e => setEditRegion(e.target.value)} />
+                                </div>
+                                <div>
+                                    <label className="block text-xs font-bold text-gray-500 mb-1">フリガナ（全角ひらがな）</label>
+                                    <input className="w-full px-4 py-2 rounded-xl bg-white/70 border-none focus:ring-2 focus:ring-primary-500 text-sm" value={editFurigana} onChange={e => setEditFurigana(e.target.value)} />
+                                </div>
+                                <div className="flex justify-end gap-2 pt-2">
+                                    <button type="button" onClick={closeEditNursery} className="px-4 py-2 rounded-xl text-sm font-semibold text-gray-500 hover:text-gray-700">キャンセル</button>
+                                    <button type="submit" className="px-5 py-2 rounded-xl text-sm font-bold text-white bg-primary-600 hover:bg-primary-700">保存</button>
+                                </div>
+                            </form>
+                        </div>
+                    )}
                 </div>
             );
         }
