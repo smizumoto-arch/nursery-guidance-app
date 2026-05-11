@@ -621,6 +621,33 @@
             };
             const canDragReorder = filterStatus === "all" && !showImportantOnly;
 
+            const escapeCsvCell = (value) => {
+                const raw = (value ?? "").toString();
+                if (raw.includes('"') || raw.includes(",") || raw.includes("\n")) {
+                    return `"${raw.replace(/"/g, '""')}"`;
+                }
+                return raw;
+            };
+
+            const handleDownloadNurseryCsv = () => {
+                const header = "地域,園名";
+                const lines = nurseries.map(n => {
+                    const region = escapeCsvCell(n.region || "");
+                    const name = escapeCsvCell(n.name || "");
+                    return `${region},${name}`;
+                });
+                const csv = [header, ...lines].join("\r\n");
+                const blob = new Blob(["\uFEFF", csv], { type: "text/csv;charset=utf-8;" });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement("a");
+                a.href = url;
+                a.download = "nursery_list.csv";
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+            };
+
             if (isAuthChecking) return (
                 <div className="min-h-screen flex items-center justify-center">
                     <div className="w-10 h-10 border-4 border-primary-200 border-t-primary-600 rounded-full animate-spin"></div>
@@ -690,6 +717,13 @@
                                         <option value="">すべての地域</option>
                                         {regions.map(r => <option key={r} value={r}>{r}</option>)}
                                     </select>
+                                    <button
+                                        onClick={handleDownloadNurseryCsv}
+                                        disabled={nurseries.length === 0}
+                                        className="w-full px-4 py-3 bg-white text-primary-600 rounded-2xl border border-primary-100 text-sm font-bold hover:bg-primary-50 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                                    >
+                                        リストをCSVでダウンロード
+                                    </button>
                                 </div>
 
                                 {/* Nursery Cards */}
