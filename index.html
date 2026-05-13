@@ -15,6 +15,7 @@
     <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-storage-compat.js"></script>
     <!-- Google Fonts -->
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Outfit:wght@500;600;700&display=swap" rel="stylesheet">
 
@@ -121,6 +122,10 @@
         }
         const auth = firebase.auth();
         const db = firebase.firestore();
+        const storage = firebase.storage();
+
+        /** Firebase Storage 上の調査レポート保存パス（園ID単位で固定 → 再アップロードで上書き） */
+        const surveyReportStoragePath = (uid, nurseryId) => `survey_reports/${uid}/${nurseryId}.pdf`;
 
         // --- Constants & Defaults ---
         const defaultItems = [
@@ -313,6 +318,11 @@
             const [editFurigana, setEditFurigana] = useState("");
             const [editDetails, setEditDetails] = useState(createEmptyNurseryDetails());
             const [draggingItemId, setDraggingItemId] = useState("");
+            const pdfInputRef = useRef(null);
+            const pdfEditInputRef = useRef(null);
+            const [pdfViewerOpen, setPdfViewerOpen] = useState(false);
+            const [surveyPdfUploading, setSurveyPdfUploading] = useState(false);
+            const [pdfUploadError, setPdfUploadError] = useState("");
 
             // [FIX-DATA-MIXING] Firestoreスナップショットのコールバックはログイン時のクロージャを
             // キャプチャするため、selectedId を ref でも管理して常に最新値を参照できるようにする。
@@ -326,6 +336,10 @@
                 setFilterStatus("all");
                 setShowImportantOnly(false);
             }, [selectedId]);
+
+            useEffect(() => {
+                if (!selectedNursery?.pdfUrl) setPdfViewerOpen(false);
+            }, [selectedId, selectedNursery?.pdfUrl]);
 
             // Auth State
             useEffect(() => {
@@ -385,6 +399,26 @@
                         console.error("Firestore update error:", error);
                     }
                 }
+            };
+
+            const uploadSurveyReportPdfToStorage = async (uid, nurseryId, file) => {
+                const ref = storage.ref(surveyReportStoragePath(uid, nurseryId));
+                await ref.put(file, { contentType: file.type || "application/pdf" });
+                return ref.getDownloadURL();
+            };
+
+            const downloadPdfFromUrl = async (url, filename) => {
+                const res = await fetch(url);
+                if (!res.ok) throw new Error("download failed");
+                const blob = await res.blob();
+                const objUrl = URL.createObjectURL(blob);
+                const a = document.createElement("a");
+                a.href = objUrl;
+                a.download = filename || "survey_report.pdf";
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(objUrl);
             };
 
             // Derived State
@@ -475,6 +509,8 @@
                 setEditRegion("");
                 setEditFurigana("");
                 setEditDetails(createEmptyNurseryDetails());
+                setPdfUploadError("");
+                if (pdfEditInputRef.current) pdfEditInputRef.current.value = "";
             };
 
             const handleSaveNurseryEdit = async (e) => {
@@ -507,10 +543,100 @@
 
             const handleDeleteNursery = async (id) => {
                 if (!confirm("この保育園のデータを削除しますか？")) return;
+                try {
+                    await storage.ref(surveyReportStoragePath(user.uid, id)).delete();
+                } catch (e) {
+                    // ファイルが無い・権限などは無視
+                }
                 const updated = nurseries.filter(n => n.id !== id);
                 setNurseries(updated);
                 updateDB(updated);
                 if (selectedId === id) setSelectedId(updated.length > 0 ? updated[0].id : "");
+            };
+
+            const firebaseStorageErrorMessage = (err) => {
+                const code = err && err.code;
+                if (code === "storage/unauthorized") {
+                    return "Storage の権限がありません（セキュリティルールで書き込みが許可されているか、ログインしているか確認してください）。コード: storage/unauthorized";
+                }
+                if (code === "storage/unauthenticated") {
+                    return "認証が必要です。一度ログアウトしてログインし直してください。コード: storage/unauthenticated";
+                }
+                if (code === "storage/quota-exceeded") {
+                    return "Storage の容量上限に達しています。コード: storage/quota-exceeded";
+                }
+                if (code === "storage/canceled") {
+                    return "アップロードがキャンセルされました。";
+                }
+                if (code === "storage/invalid-checksum" || code === "storage/retry-limit-exceeded") {
+                    return "ネットワークエラーでアップロードに失敗しました。もう一度お試しください。コード: " + code;
+                }
+                return (err && err.message) ? String(err.message) : "アップロードに失敗しました。";
+            };
+
+            const handleSurveyPdfUploadFor = async (nurseryId, inputRef) => {
+                const input = inputRef?.current;
+                if (!user) {
+                    alert("ログインしてください。");
+                    return;
+                }
+                if (!nurseryId) {
+                    alert("園が選択されていません。リストから園を選んでからアップロードしてください。");
+                    return;
+                }
+                if (!input?.files?.length) {
+                    alert("先に「調査レポート(PDF)を選択」でファイルを選んでから、「アップロード」を押してください。");
+                    return;
+                }
+                const file = input.files[0];
+                const okType =
+                    file.type === "application/pdf" ||
+                    file.type === "application/x-pdf" ||
+                    /\.pdf$/i.test(file.name || "");
+                if (!okType) {
+                    alert("PDFファイルを選択してください。（現在のファイル: " + (file.name || "無名") + "）");
+                    return;
+                }
+                setSurveyPdfUploading(true);
+                setPdfUploadError("");
+                try {
+                    const url = await uploadSurveyReportPdfToStorage(user.uid, nurseryId, file);
+                    const updated = nurseries.map(n =>
+                        n.id === nurseryId ? { ...n, pdfUrl: url } : n
+                    );
+                    setNurseries(updated);
+                    await updateDB(updated);
+                    input.value = "";
+                } catch (err) {
+                    console.error(err);
+                    const hint = firebaseStorageErrorMessage(err);
+                    setPdfUploadError(
+                        "アップロードに失敗しました: " + hint +
+                        " 【確認】Firebase コンソールで Storage が有効か、ルールで survey_reports/{uid}/ への read,write がログイン済みユーザーに許可されているか。"
+                    );
+                } finally {
+                    setSurveyPdfUploading(false);
+                }
+            };
+
+            const handleSurveyPdfUploadDetail = () => handleSurveyPdfUploadFor(selectedId, pdfInputRef);
+            const handleSurveyPdfUploadEdit = () => handleSurveyPdfUploadFor(editingNurseryId, pdfEditInputRef);
+
+            const surveyPdfSafeFilename = (name) => `${(name || "hoikuen").replace(/[\\/:*?"<>|]/g, "_")}_調査レポート.pdf`;
+
+            const handleSurveyPdfDownload = async () => {
+                if (!selectedNursery?.pdfUrl) return;
+                try {
+                    await downloadPdfFromUrl(selectedNursery.pdfUrl, surveyPdfSafeFilename(selectedNursery.name));
+                } catch (e) {
+                    console.warn(e);
+                    window.open(selectedNursery.pdfUrl, "_blank", "noopener,noreferrer");
+                }
+            };
+
+            const handleSurveyPdfOpenPrintTab = () => {
+                if (!selectedNursery?.pdfUrl) return;
+                window.open(selectedNursery.pdfUrl, "_blank", "noopener,noreferrer");
             };
 
             const handleToggleItem = (itemId) => {
@@ -766,6 +892,20 @@
                                                         <p className={`text-[11px] font-bold uppercase tracking-wider opacity-60`}>{n.region || 'Unknown'}</p>
                                                     </div>
                                                     <div className="flex items-center gap-1">
+                                                        {n.pdfUrl && (
+                                                            <button
+                                                                type="button"
+                                                                title="調査レポートを表示"
+                                                                onClick={(e) => {
+                                                                    e.stopPropagation();
+                                                                    setSelectedId(n.id);
+                                                                    setPdfViewerOpen(true);
+                                                                }}
+                                                                className={`p-1.5 rounded-lg opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity ${selectedId === n.id ? 'hover:bg-primary-500 text-white' : 'hover:bg-white text-primary-600 bg-white/80'}`}
+                                                            >
+                                                                📄
+                                                            </button>
+                                                        )}
                                                         <button
                                                             onClick={(e) => { e.stopPropagation(); openEditNursery(n); }}
                                                             className={`p-1.5 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity ${selectedId === n.id ? 'hover:bg-primary-500 text-white' : 'hover:bg-primary-50 text-primary-500'}`}
@@ -845,6 +985,67 @@
                                             <p><span className="text-gray-400">園長名：</span>{selectedNursery.directorName || "-"}</p>
                                             <p><span className="text-gray-400">副園長名・主任名：</span>{selectedNursery.deputyDirectorName || "-"}</p>
                                         </div>
+                                    </div>
+
+                                    <div className="glass-card rounded-[2rem] p-6 border border-white/50 space-y-4">
+                                        <h3 className="text-sm font-bold text-gray-700">調査レポート（PDF）</h3>
+                                        <p className="text-xs text-gray-500 leading-relaxed">
+                                            ChatGPT 等で作成した事前調査レポートを PDF で保存します。同じ園に再度アップロードすると Storage 上のファイルが置き換わり、ダウンロード URL が更新されます。
+                                        </p>
+                                        {selectedNursery.pdfUrl ? (
+                                            <>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => setPdfViewerOpen(true)}
+                                                    className="w-full py-4 px-6 rounded-2xl bg-gradient-to-r from-primary-600 to-primary-700 text-white text-base font-heading font-bold shadow-lg shadow-primary-300/40 hover:from-primary-700 hover:to-primary-800 hover:scale-[1.01] active:scale-[0.99] transition-all-custom flex items-center justify-center gap-2"
+                                                >
+                                                    📄 調査レポートを表示
+                                                </button>
+                                                <div className="flex flex-col sm:flex-row gap-2 justify-center">
+                                                    <button
+                                                        type="button"
+                                                        onClick={handleSurveyPdfDownload}
+                                                        className="flex-1 py-2.5 px-4 rounded-xl bg-white border border-primary-100 text-sm font-bold text-primary-700 hover:bg-primary-50 transition-all-custom"
+                                                    >
+                                                        📥 ダウンロード
+                                                    </button>
+                                                    <button
+                                                        type="button"
+                                                        onClick={handleSurveyPdfOpenPrintTab}
+                                                        className="flex-1 py-2.5 px-4 rounded-xl bg-white border border-primary-100 text-sm font-bold text-gray-700 hover:bg-gray-50 transition-all-custom"
+                                                    >
+                                                        🖨 印刷用に別タブで開く
+                                                    </button>
+                                                </div>
+                                            </>
+                                        ) : (
+                                            <p className="text-sm text-gray-400 font-medium">まだ PDF が登録されていません。下の欄からアップロードしてください。</p>
+                                        )}
+                                        <div className="flex flex-col sm:flex-row gap-3 items-stretch pt-1">
+                                            <label className="flex-1 cursor-pointer">
+                                                <span className="block w-full text-center py-3 px-4 rounded-2xl bg-white/70 border border-white/80 text-sm font-bold text-primary-700 hover:bg-white transition-all-custom">
+                                                    調査レポート(PDF)を選択
+                                                </span>
+                                                <input
+                                                    ref={pdfInputRef}
+                                                    type="file"
+                                                    accept="application/pdf,.pdf"
+                                                    className="hidden"
+                                                    onChange={() => setPdfUploadError("")}
+                                                />
+                                            </label>
+                                            <button
+                                                type="button"
+                                                onClick={handleSurveyPdfUploadDetail}
+                                                disabled={surveyPdfUploading || !selectedId}
+                                                className="sm:w-44 py-3 px-4 rounded-2xl bg-primary-600 text-white text-sm font-bold hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all-custom"
+                                            >
+                                                {surveyPdfUploading ? "アップロード中…" : "アップロード"}
+                                            </button>
+                                        </div>
+                                        {pdfUploadError && (
+                                            <p className="text-sm text-rose-600 font-medium">{pdfUploadError}</p>
+                                        )}
                                     </div>
 
                                     {/* Filter Tabs */}
@@ -1001,6 +1202,47 @@
                         </main>
                     </div>
 
+                    {pdfViewerOpen && selectedNursery?.pdfUrl && (
+                        <div className="fixed inset-0 z-[60] flex flex-col bg-slate-950/90 backdrop-blur-md">
+                            <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 bg-white/95 border-b border-gray-200 shrink-0 shadow-sm">
+                                <p className="text-sm font-heading font-bold text-gray-900 truncate max-w-[min(28rem,70vw)]">
+                                    {selectedNursery.name} — 調査レポート
+                                </p>
+                                <div className="flex flex-wrap items-center gap-2">
+                                    <button
+                                        type="button"
+                                        onClick={handleSurveyPdfDownload}
+                                        className="px-4 py-2 rounded-xl text-xs font-bold bg-primary-600 text-white hover:bg-primary-700 transition-all-custom"
+                                    >
+                                        📥 ダウンロード
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={handleSurveyPdfOpenPrintTab}
+                                        className="px-4 py-2 rounded-xl text-xs font-bold bg-white border border-gray-200 text-gray-800 hover:bg-gray-50 transition-all-custom"
+                                    >
+                                        🖨 印刷（別タブ）
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={() => setPdfViewerOpen(false)}
+                                        className="px-4 py-2 rounded-xl text-xs font-bold text-gray-500 hover:text-gray-800 hover:bg-gray-100 transition-all-custom"
+                                    >
+                                        閉じる
+                                    </button>
+                                </div>
+                            </div>
+                            <iframe
+                                title="調査レポートPDF"
+                                src={`${selectedNursery.pdfUrl}#toolbar=1&navpanes=0`}
+                                className="flex-1 w-full min-h-[50vh] md:min-h-0 bg-neutral-900 border-0"
+                            />
+                            <p className="shrink-0 px-4 py-2 text-[11px] text-white/70 text-center bg-black/20">
+                                印刷する場合は「印刷（別タブ）」で開いたタブで Ctrl+P（⌘+P）を押すか、この画面のままブラウザの印刷機能をご利用ください。
+                            </p>
+                        </div>
+                    )}
+
                     {editingNurseryId && (
                         <div className="fixed inset-0 z-50 bg-black/30 backdrop-blur-sm flex items-center justify-center px-4">
                             <form onSubmit={handleSaveNurseryEdit} className="w-full max-w-md glass-card rounded-[2rem] p-6 space-y-4 border border-white/60">
@@ -1051,6 +1293,36 @@
                                         <label className="block text-xs font-bold text-gray-500 mb-1">副園長名・主任名（任意）</label>
                                         <input className="w-full px-4 py-2 rounded-xl bg-white/70 border-none focus:ring-2 focus:ring-primary-500 text-sm" value={editDetails.deputyDirectorName} onChange={e => setEditDetails(prev => ({ ...prev, deputyDirectorName: e.target.value }))} />
                                     </div>
+                                </div>
+                                <div className="rounded-2xl border border-primary-100 bg-primary-50/40 p-4 space-y-3">
+                                    <label className="block text-xs font-bold text-gray-600">調査レポート（PDF）</label>
+                                    <p className="text-[11px] text-gray-500 leading-relaxed">この園の PDF をアップロードすると Firestore の <code className="text-[10px] bg-white/80 px-1 rounded">pdfUrl</code> に保存されます（再アップロードで上書き）。</p>
+                                    {nurseries.find(x => x.id === editingNurseryId)?.pdfUrl && (
+                                        <p className="text-xs font-semibold text-emerald-700">現在 PDF が登録されています。</p>
+                                    )}
+                                    <div className="flex flex-col sm:flex-row gap-2">
+                                        <label className="flex-1 cursor-pointer">
+                                            <span className="block w-full text-center py-2.5 px-3 rounded-xl bg-white border border-primary-100 text-xs font-bold text-primary-700 hover:bg-primary-50 transition-all-custom">
+                                                調査レポート(PDF)を選択
+                                            </span>
+                                            <input
+                                                ref={pdfEditInputRef}
+                                                type="file"
+                                                accept="application/pdf,.pdf"
+                                                className="hidden"
+                                                onChange={() => setPdfUploadError("")}
+                                            />
+                                        </label>
+                                        <button
+                                            type="button"
+                                            onClick={handleSurveyPdfUploadEdit}
+                                            disabled={surveyPdfUploading || !editingNurseryId}
+                                            className="sm:w-36 py-2.5 px-3 rounded-xl bg-primary-600 text-white text-xs font-bold hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all-custom"
+                                        >
+                                            {surveyPdfUploading ? "処理中…" : "アップロード"}
+                                        </button>
+                                    </div>
+                                    {pdfUploadError && <p className="text-xs text-rose-600 font-medium">{pdfUploadError}</p>}
                                 </div>
                                 <div className="flex justify-end gap-2 pt-2">
                                     <button type="button" onClick={closeEditNursery} className="px-4 py-2 rounded-xl text-sm font-semibold text-gray-500 hover:text-gray-700">キャンセル</button>
