@@ -410,16 +410,19 @@
                 }
             };
 
-            // Firestore Sync (subcollection listener + one-time migration)
+            // ─── Firestore Migration ──────────────────────────────────────────
+            // 旧形式（users/{uid}.nurseries 配列）→ 新形式（サブコレクション）への
+            // 一回限りの移行。async IIFE を useEffect 内で使ってよいのは「クリーンアップ
+            // が不要な一発処理」に限る。リスナー登録は絶対にこのuseEffectに入れない。
             useEffect(() => {
                 if (!user) return;
+                let cancelled = false;
                 const userDocRef = db.collection('users').doc(user.uid);
-                let unsubscribe = null;
 
                 (async () => {
                     try {
-                        // 旧形式の検出と移行（冪等：何度実行しても安全）
                         const userDoc = await userDocRef.get();
+                        if (cancelled) return;
                         const data = userDoc.exists ? (userDoc.data() || {}) : {};
 
                         if (!userDoc.exists) {
@@ -432,20 +435,18 @@
                                 ...createEmptyNurseryDetails(),
                                 checklist: defaultItems.map(i => ({ ...i, important: false }))
                             }];
+                            if (cancelled) return;
                             const batch = db.batch();
                             initial.forEach(n => {
                                 const { id, ...rest } = n;
                                 batch.set(nurseriesCol(user.uid).doc(id), rest);
                             });
-                            batch.set(userDocRef, {
-                                nurseries_migrated_to_subcol: true,
-                                schema_version: 2
-                            });
+                            batch.set(userDocRef, { nurseries_migrated_to_subcol: true, schema_version: 2 });
                             await batch.commit();
-                            localStorage.removeItem("nurseryGuidanceData");
+                            if (!cancelled) localStorage.removeItem("nurseryGuidanceData");
                         } else if (!data.nurseries_migrated_to_subcol && Array.isArray(data.nurseries) && data.nurseries.length > 0) {
-                            // 旧形式（配列）→ 新形式（サブコレクション）に移行
                             const subSnap = await nurseriesCol(user.uid).limit(1).get();
+                            if (cancelled) return;
                             if (subSnap.empty) {
                                 const batch = db.batch();
                                 data.nurseries.forEach(n => {
@@ -453,28 +454,43 @@
                                     const { id, ...rest } = n;
                                     batch.set(nurseriesCol(user.uid).doc(id), rest);
                                 });
-                                // 元の配列は破壊せず別フィールドに退避してから移行完了フラグを立てる
                                 batch.update(userDocRef, {
                                     nurseries_migrated_to_subcol: true,
                                     nurseries_legacy_backup: data.nurseries,
                                     schema_version: 2
                                 });
                                 await batch.commit();
-                                console.info("[migration] Migrated", data.nurseries.length, "nurseries from array to subcollection.");
+                                if (!cancelled) console.info("[migration] Migrated", data.nurseries.length, "nurseries → subcollection.");
                             } else {
-                                // サブコレクションに既にデータがあるなら、フラグだけ立てる
-                                await userDocRef.update({
-                                    nurseries_migrated_to_subcol: true,
-                                    schema_version: 2
-                                });
+                                await userDocRef.update({ nurseries_migrated_to_subcol: true, schema_version: 2 });
                             }
                         }
                     } catch (e) {
-                        console.error("[migration check]", e);
+                        if (!cancelled) console.error("[migration]", e);
                     }
+                })();
 
-                    // サブコレクションのスナップショットに購読
-                    unsubscribe = nurseriesCol(user.uid).onSnapshot(snap => {
+                return () => { cancelled = true; };
+            }, [user?.uid]); // uid が変わった時だけ実行。Firebaseがuserオブジェクトを
+                             // 再生成しても uid が同じなら移行を再実行しない。
+
+            // ─── Firestore Realtime Listener ──────────────────────────────────
+            // 【修正ポイント】
+            //   1. 移行処理と完全分離 → async IIFE 不使用。cleanup が必ず機能する。
+            //   2. 依存配列を [user?.uid] に。Firebaseがuserオブジェクトを再生成しても
+            //      uid が同じなら再購読しない（spurious re-subscribe 防止）。
+            //   3. コールバックを同期関数に。Firebase の onSnapshot は同期コールバック前提。
+            //   4. onError ハンドラを追加。エラー時もサイレントに死なない。
+            const [_lastSnapshotTime, _setLastSnapshotTime] = useState(null);
+
+            useEffect(() => {
+                if (!user) return;
+
+                const unsubscribe = nurseriesCol(user.uid).onSnapshot(
+                    { includeMetadataChanges: false },
+                    (snap) => {
+                        const now = new Date().toLocaleTimeString('ja-JP');
+                        _setLastSnapshotTime(now);
                         const list = snap.docs.map(d => ({ id: d.id, ...d.data() }));
                         const normalized = list.map(n => ({
                             ...createEmptyNurseryDetails(),
@@ -485,23 +501,25 @@
                             }))
                         }));
                         setNurseries(normalized);
-                        // [FIX-DATA-MIXING] selectedIdRef.current を使うことで、
-                        // 毎回の書き込み後スナップショットで選択が1番目にリセットされるバグを修正。
+                        // selectedIdRef を使って最新の選択IDを参照（クロージャ問題を回避）
                         if (!selectedIdRef.current && normalized.length > 0 && window.innerWidth >= 1024) {
-                            // 表示順（フリガナ）に合わせて先頭を選択
                             const sortKey = (n) => (n.furigana || n.reading || n.kana || n.name || "").trim();
                             const sorted = [...normalized].sort((a, b) =>
                                 sortKey(a).localeCompare(sortKey(b), "ja", { sensitivity: "base" })
                             );
                             setSelectedId(sorted[0].id);
                         }
-                    });
-                })();
+                    },
+                    (err) => {
+                        // onError: リスナーがエラーで死んだ場合にコンソールで即検知できる
+                        console.error('[Firestore onSnapshot error]', err.code, err.message);
+                    }
+                );
 
-                return () => {
-                    if (unsubscribe) unsubscribe();
-                };
-            }, [user]);
+                // cleanup は同期的に unsubscribe を持っているため、
+                // Strict Mode の二重マウントでも確実にリスナーが解除される。
+                return () => unsubscribe();
+            }, [user?.uid]);
 
             const uploadSurveyReportPdfToStorage = async (uid, nurseryId, file) => {
                 const ref = storage.ref(surveyReportStoragePath(uid, nurseryId));
@@ -883,6 +901,12 @@
 
             return (
                 <div className="max-w-5xl mx-auto px-4 py-8 md:py-12">
+                    {/* ── DEBUG PANEL（動作確認用・後で削除） ── */}
+                    <div style={{position:'fixed',bottom:12,right:12,zIndex:9999,background:'rgba(0,0,0,0.75)',color:'#0f0',fontFamily:'monospace',fontSize:'11px',padding:'8px 12px',borderRadius:'8px',lineHeight:1.6,pointerEvents:'none'}}>
+                        <div>🗃 nurseries (React state): <b>{nurseries.length}</b></div>
+                        <div>⏱ last onSnapshot: <b>{_lastSnapshotTime || '—'}</b></div>
+                        <div>👤 uid: {user?.uid?.slice(0,8)}…</div>
+                    </div>
                     {/* Header */}
                     <header className="flex items-center justify-between gap-6 mb-8">
                         <div className="flex items-center gap-3">
