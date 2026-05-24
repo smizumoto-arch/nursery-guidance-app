@@ -350,13 +350,133 @@
                 return () => unsubscribe();
             }, []);
 
-            // Firestore Sync
+            // [DATA-MODEL-V2] サブコレクション構造への移行
+            // 旧: users/{uid} ドキュメント1個に nurseries 配列を丸ごと保存
+            //      → 1園更新でも全配列を書き直すため、stale state による
+            //        全データ消失事故が起きやすい構造だった。
+            // 新: users/{uid}/nurseries/{nurseryId} の独立ドキュメント
+            //      → 1園更新は1ドキュメントのみ書き換え。他の園は絶対に
+            //        巻き込まれない。
+            //
+            // 起動時に旧形式が残っていれば自動で新形式へ移行する。
+            // 旧 nurseries 配列は安全のため users/{uid}.nurseries_legacy_backup
+            // に保管したまま消さない（万一の二重移行・参照のため）。
+            const nurseriesCol = (uid) => db.collection('users').doc(uid).collection('nurseries');
+
+            // 単一園を更新（merge）。指定したフィールドだけ変更され、他フィールドは破壊しない。
+            const updateNurseryDoc = async (nurseryId, partialData) => {
+                if (!user || !nurseryId) return;
+                try {
+                    await nurseriesCol(user.uid).doc(nurseryId).set(partialData, { merge: true });
+                } catch (err) {
+                    console.error("[updateNurseryDoc]", err);
+                }
+            };
+
+            // 新規園を作成。
+            const createNurseryDoc = async (nurseryObj) => {
+                if (!user || !nurseryObj?.id) return;
+                const { id, ...rest } = nurseryObj;
+                try {
+                    await nurseriesCol(user.uid).doc(id).set(rest);
+                } catch (err) {
+                    console.error("[createNurseryDoc]", err);
+                }
+            };
+
+            // 園を完全削除。
+            const deleteNurseryDoc = async (nurseryId) => {
+                if (!user || !nurseryId) return;
+                try {
+                    await nurseriesCol(user.uid).doc(nurseryId).delete();
+                } catch (err) {
+                    console.error("[deleteNurseryDoc]", err);
+                }
+            };
+
+            // 複数の園を一括更新（全園共通チェック項目の追加/削除など）。
+            // updates: [{ id, data }] の配列。各 data は merge で書き込まれる。
+            const batchUpdateNurseries = async (updates) => {
+                if (!user || !updates?.length) return;
+                try {
+                    const batch = db.batch();
+                    const col = nurseriesCol(user.uid);
+                    updates.forEach(({ id, data }) => {
+                        batch.set(col.doc(id), data, { merge: true });
+                    });
+                    await batch.commit();
+                } catch (err) {
+                    console.error("[batchUpdateNurseries]", err);
+                }
+            };
+
+            // Firestore Sync (subcollection listener + one-time migration)
             useEffect(() => {
                 if (!user) return;
                 const userDocRef = db.collection('users').doc(user.uid);
-                const unsubscribe = userDocRef.onSnapshot(async doc => {
-                    if (doc.exists) {
-                        const data = (doc.data().nurseries || []).map(n => ({
+                let unsubscribe = null;
+
+                (async () => {
+                    try {
+                        // 旧形式の検出と移行（冪等：何度実行しても安全）
+                        const userDoc = await userDocRef.get();
+                        const data = userDoc.exists ? (userDoc.data() || {}) : {};
+
+                        if (!userDoc.exists) {
+                            // 初回ユーザー：localStorage または初期データを subcollection に投入
+                            const localData = localStorage.getItem("nurseryGuidanceData");
+                            const initial = localData ? JSON.parse(localData) : [{
+                                id: "1",
+                                name: "サンライズ保育園",
+                                region: "東京都",
+                                ...createEmptyNurseryDetails(),
+                                checklist: defaultItems.map(i => ({ ...i, important: false }))
+                            }];
+                            const batch = db.batch();
+                            initial.forEach(n => {
+                                const { id, ...rest } = n;
+                                batch.set(nurseriesCol(user.uid).doc(id), rest);
+                            });
+                            batch.set(userDocRef, {
+                                nurseries_migrated_to_subcol: true,
+                                schema_version: 2
+                            });
+                            await batch.commit();
+                            localStorage.removeItem("nurseryGuidanceData");
+                        } else if (!data.nurseries_migrated_to_subcol && Array.isArray(data.nurseries) && data.nurseries.length > 0) {
+                            // 旧形式（配列）→ 新形式（サブコレクション）に移行
+                            const subSnap = await nurseriesCol(user.uid).limit(1).get();
+                            if (subSnap.empty) {
+                                const batch = db.batch();
+                                data.nurseries.forEach(n => {
+                                    if (!n || !n.id) return;
+                                    const { id, ...rest } = n;
+                                    batch.set(nurseriesCol(user.uid).doc(id), rest);
+                                });
+                                // 元の配列は破壊せず別フィールドに退避してから移行完了フラグを立てる
+                                batch.update(userDocRef, {
+                                    nurseries_migrated_to_subcol: true,
+                                    nurseries_legacy_backup: data.nurseries,
+                                    schema_version: 2
+                                });
+                                await batch.commit();
+                                console.info("[migration] Migrated", data.nurseries.length, "nurseries from array to subcollection.");
+                            } else {
+                                // サブコレクションに既にデータがあるなら、フラグだけ立てる
+                                await userDocRef.update({
+                                    nurseries_migrated_to_subcol: true,
+                                    schema_version: 2
+                                });
+                            }
+                        }
+                    } catch (e) {
+                        console.error("[migration check]", e);
+                    }
+
+                    // サブコレクションのスナップショットに購読
+                    unsubscribe = nurseriesCol(user.uid).onSnapshot(snap => {
+                        const list = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+                        const normalized = list.map(n => ({
                             ...createEmptyNurseryDetails(),
                             ...n,
                             checklist: (n.checklist || []).map(item => ({
@@ -364,42 +484,24 @@
                                 important: Boolean(item.important)
                             }))
                         }));
-                        setNurseries(data);
+                        setNurseries(normalized);
                         // [FIX-DATA-MIXING] selectedIdRef.current を使うことで、
                         // 毎回の書き込み後スナップショットで選択が1番目にリセットされるバグを修正。
-                        if (!selectedIdRef.current && data.length > 0 && window.innerWidth >= 1024) {
-                            setSelectedId(data[0].id);
+                        if (!selectedIdRef.current && normalized.length > 0 && window.innerWidth >= 1024) {
+                            // 表示順（フリガナ）に合わせて先頭を選択
+                            const sortKey = (n) => (n.furigana || n.reading || n.kana || n.name || "").trim();
+                            const sorted = [...normalized].sort((a, b) =>
+                                sortKey(a).localeCompare(sortKey(b), "ja", { sensitivity: "base" })
+                            );
+                            setSelectedId(sorted[0].id);
                         }
-                    } else {
-                        // 初回移行
-                        const localData = localStorage.getItem("nurseryGuidanceData");
-                        const initial = localData ? JSON.parse(localData) : [{
-                            id: "1",
-                            name: "サンライズ保育園",
-                            region: "東京都",
-                            ...createEmptyNurseryDetails(),
-                            checklist: defaultItems.map(i => ({ ...i, important: false }))
-                        }];
-                        await userDocRef.set({ nurseries: initial });
-                        localStorage.removeItem("nurseryGuidanceData");
-                    }
-                });
-                return () => unsubscribe();
-            }, [user]);
+                    });
+                })();
 
-            const updateDB = async (newData) => {
-                if (!user) return;
-                try {
-                    await db.collection('users').doc(user.uid).update({ nurseries: newData });
-                } catch (error) {
-                    // 初回作成前など update が失敗するケースに備えて set でフォールバック
-                    if (error && error.code === "not-found") {
-                        await db.collection('users').doc(user.uid).set({ nurseries: newData }, { merge: true });
-                    } else {
-                        console.error("Firestore update error:", error);
-                    }
-                }
-            };
+                return () => {
+                    if (unsubscribe) unsubscribe();
+                };
+            }, [user]);
 
             const uploadSurveyReportPdfToStorage = async (uid, nurseryId, file) => {
                 const ref = storage.ref(surveyReportStoragePath(uid, nurseryId));
@@ -454,9 +556,10 @@
             const regions = Array.from(new Set(nurseries.map(n => n.region).filter(Boolean)));
             const isHiragana = (value) => /^[\u3041-\u3096\u30fc\s]+$/.test((value || "").trim());
 
-            // [FIX-SIDE-EFFECT] 以下すべてのハンドラで、setNurseries の updater 関数内で
-            // updateDB/setSelectedId を呼ぶ副作用パターンを修正。
-            // updater は純粋関数である必要があり、副作用はその外に出す。
+            // [DATA-MODEL-V2] 以下すべてのハンドラは「触った園のドキュメントだけ」を
+            // 書き換えます。他の園は書き込み対象になりません。
+            // stale state による全データ消失事故が起きないよう、ローカル state も
+            // setNurseries(prev => ...) で最新値を基に更新します。
 
             const handleAddNursery = async (e) => {
                 e.preventDefault();
@@ -469,16 +572,17 @@
                 const items = nurseries.length > 0
                     ? nurseries[0].checklist.map(i => ({ ...i, completed: false, memo: "", completedDate: "", nextActionDate: "", important: false }))
                     : defaultItems.map(i => ({ ...i, important: false }));
-                const updated = [...nurseries, {
+                const newNursery = {
                     id: newId,
                     name: newName.trim(),
                     region: newRegion.trim(),
                     furigana: newFurigana.trim(),
                     ...newDetails,
                     checklist: items
-                }];
-                setNurseries(updated);
-                updateDB(updated);
+                };
+                // [DATA-MODEL-V2] 単一ドキュメント書き込みのみ。他の園は絶対に巻き込まない。
+                setNurseries(prev => [...prev, newNursery]);
+                await createNurseryDoc(newNursery);
                 setSelectedId(newId);
                 setNewName("");
                 setNewRegion("");
@@ -525,19 +629,17 @@
                     return;
                 }
 
-                const updated = nurseries.map(n =>
-                    n.id === editingNurseryId
-                        ? {
-                            ...n,
-                            name: editName.trim(),
-                            region: editRegion.trim(),
-                            furigana: editFurigana.trim(),
-                            ...editDetails
-                        }
-                        : n
-                );
-                setNurseries(updated);
-                await updateDB(updated);
+                const editedFields = {
+                    name: editName.trim(),
+                    region: editRegion.trim(),
+                    furigana: editFurigana.trim(),
+                    ...editDetails
+                };
+                // [DATA-MODEL-V2] 該当園のドキュメントだけ更新（merge）。
+                setNurseries(prev => prev.map(n =>
+                    n.id === editingNurseryId ? { ...n, ...editedFields } : n
+                ));
+                await updateNurseryDoc(editingNurseryId, editedFields);
                 closeEditNursery();
             };
 
@@ -548,10 +650,11 @@
                 } catch (e) {
                     // ファイルが無い・権限などは無視
                 }
-                const updated = nurseries.filter(n => n.id !== id);
-                setNurseries(updated);
-                updateDB(updated);
-                if (selectedId === id) setSelectedId(updated.length > 0 ? updated[0].id : "");
+                // [DATA-MODEL-V2] 該当園のドキュメントだけ削除。
+                const remaining = nurseries.filter(n => n.id !== id);
+                setNurseries(remaining);
+                await deleteNurseryDoc(id);
+                if (selectedId === id) setSelectedId(remaining.length > 0 ? remaining[0].id : "");
             };
 
             const firebaseStorageErrorMessage = (err) => {
@@ -601,11 +704,11 @@
                 setPdfUploadError("");
                 try {
                     const url = await uploadSurveyReportPdfToStorage(user.uid, nurseryId, file);
-                    const updated = nurseries.map(n =>
+                    // [DATA-MODEL-V2] 該当園のドキュメントだけ pdfUrl を更新。
+                    setNurseries(prev => prev.map(n =>
                         n.id === nurseryId ? { ...n, pdfUrl: url } : n
-                    );
-                    setNurseries(updated);
-                    await updateDB(updated);
+                    ));
+                    await updateNurseryDoc(nurseryId, { pdfUrl: url });
                     input.value = "";
                 } catch (err) {
                     console.error(err);
@@ -641,74 +744,69 @@
 
             const handleToggleItem = (itemId) => {
                 const today = new Date().toISOString().split('T')[0];
-                const updated = nurseries.map(n => {
-                    if (n.id === selectedId) {
-                        return {
-                            ...n,
-                            checklist: n.checklist.map(item => {
-                                if (item.id === itemId) {
-                                    const next = !item.completed;
-                                    return { ...item, completed: next, completedDate: next ? today : "" };
-                                }
-                                return item;
-                            })
-                        };
+                const target = nurseries.find(n => n.id === selectedId);
+                if (!target) return;
+                const newChecklist = target.checklist.map(item => {
+                    if (item.id === itemId) {
+                        const next = !item.completed;
+                        return { ...item, completed: next, completedDate: next ? today : "" };
                     }
-                    return n;
+                    return item;
                 });
-                setNurseries(updated);
-                updateDB(updated);
+                // [DATA-MODEL-V2] 選択中の園のドキュメントだけ更新。
+                setNurseries(prev => prev.map(n => n.id === selectedId ? { ...n, checklist: newChecklist } : n));
+                updateNurseryDoc(selectedId, { checklist: newChecklist });
             };
 
             const handleToggleImportant = (itemId) => {
-                const updated = nurseries.map(n => {
-                    if (n.id === selectedId) {
-                        return {
-                            ...n,
-                            checklist: n.checklist.map(item =>
-                                item.id === itemId ? { ...item, important: !item.important } : item
-                            )
-                        };
-                    }
-                    return n;
-                });
-                setNurseries(updated);
-                updateDB(updated);
+                const target = nurseries.find(n => n.id === selectedId);
+                if (!target) return;
+                const newChecklist = target.checklist.map(item =>
+                    item.id === itemId ? { ...item, important: !item.important } : item
+                );
+                setNurseries(prev => prev.map(n => n.id === selectedId ? { ...n, checklist: newChecklist } : n));
+                updateNurseryDoc(selectedId, { checklist: newChecklist });
             };
 
             const handleUpdateItem = (itemId, field, value) => {
-                const updated = nurseries.map(n => {
-                    if (n.id === selectedId) {
-                        return {
-                            ...n,
-                            checklist: n.checklist.map(item => item.id === itemId ? { ...item, [field]: value } : item)
-                        };
-                    }
-                    return n;
-                });
-                setNurseries(updated);
-                updateDB(updated);
+                const target = nurseries.find(n => n.id === selectedId);
+                if (!target) return;
+                const newChecklist = target.checklist.map(item =>
+                    item.id === itemId ? { ...item, [field]: value } : item
+                );
+                setNurseries(prev => prev.map(n => n.id === selectedId ? { ...n, checklist: newChecklist } : n));
+                updateNurseryDoc(selectedId, { checklist: newChecklist });
             };
 
             // 項目追加（全園 or この園のみ）
             const handleAddItem = (text, isGlobal) => {
                 if (!text.trim()) return;
                 const newItem = { id: Date.now().toString(), text: text.trim(), completed: false, memo: "", completedDate: "", nextActionDate: "", important: false };
-                let updated;
                 if (isGlobal) {
-                    updated = nurseries.map(n => ({ ...n, checklist: [...n.checklist, { ...newItem }] }));
+                    // 全園に同じ項目を追加：batchで各園のドキュメントを独立更新。
+                    const updates = nurseries.map(n => ({
+                        id: n.id,
+                        data: { checklist: [...(n.checklist || []), { ...newItem }] }
+                    }));
+                    setNurseries(prev => prev.map(n => ({ ...n, checklist: [...(n.checklist || []), { ...newItem }] })));
+                    batchUpdateNurseries(updates);
                 } else {
-                    updated = nurseries.map(n => n.id === selectedId ? { ...n, checklist: [...n.checklist, newItem] } : n);
+                    const target = nurseries.find(n => n.id === selectedId);
+                    if (!target) return;
+                    const newChecklist = [...(target.checklist || []), newItem];
+                    setNurseries(prev => prev.map(n => n.id === selectedId ? { ...n, checklist: newChecklist } : n));
+                    updateNurseryDoc(selectedId, { checklist: newChecklist });
                 }
-                setNurseries(updated);
-                updateDB(updated);
             };
 
             const handleDeleteItemGlobal = async (itemId) => {
                 if (!confirm("すべての園からこの項目を削除しますか？")) return;
-                const updated = nurseries.map(n => ({ ...n, checklist: n.checklist.filter(i => i.id !== itemId) }));
-                setNurseries(updated);
-                updateDB(updated);
+                const updates = nurseries.map(n => ({
+                    id: n.id,
+                    data: { checklist: (n.checklist || []).filter(i => i.id !== itemId) }
+                }));
+                setNurseries(prev => prev.map(n => ({ ...n, checklist: (n.checklist || []).filter(i => i.id !== itemId) })));
+                await batchUpdateNurseries(updates);
             };
 
             const handleDragStartItem = (itemId) => {
@@ -725,20 +823,17 @@
                     return;
                 }
 
-                const updated = nurseries.map(n => {
-                    if (n.id !== selectedId) return n;
-                    const list = [...(n.checklist || [])];
-                    const fromIndex = list.findIndex(i => i.id === draggingItemId);
-                    const toIndex = list.findIndex(i => i.id === targetItemId);
-                    if (fromIndex < 0 || toIndex < 0) return n;
+                const target = nurseries.find(n => n.id === selectedId);
+                if (!target) { setDraggingItemId(""); return; }
+                const list = [...(target.checklist || [])];
+                const fromIndex = list.findIndex(i => i.id === draggingItemId);
+                const toIndex = list.findIndex(i => i.id === targetItemId);
+                if (fromIndex < 0 || toIndex < 0) { setDraggingItemId(""); return; }
+                const [moved] = list.splice(fromIndex, 1);
+                list.splice(toIndex, 0, moved);
 
-                    const [moved] = list.splice(fromIndex, 1);
-                    list.splice(toIndex, 0, moved);
-                    return { ...n, checklist: list };
-                });
-
-                setNurseries(updated);
-                updateDB(updated);
+                setNurseries(prev => prev.map(n => n.id === selectedId ? { ...n, checklist: list } : n));
+                updateNurseryDoc(selectedId, { checklist: list });
                 setDraggingItemId("");
             };
 
