@@ -465,6 +465,41 @@
                                 await userDocRef.update({ nurseries_migrated_to_subcol: true, schema_version: 2 });
                             }
                         }
+
+                        // [FIX-MIGRATION-INCOMPLETE] 救済移行 (v3):
+                        // 旧 nurseries 配列に存在するが subcollection に無い ID を補完。
+                        // 既に subcollection にあるドキュメント（チェック進捗・メモを含む）は
+                        // 絶対に触らない。配列も削除しない（バックアップとして保持）。
+                        // 一回だけ実行し、フラグを立てた後は再実行しない
+                        // → ユーザーが園を削除しても、次回ログインで復活させない。
+                        if (!cancelled && userDoc.exists && !data.nurseries_rescued_v3
+                                && Array.isArray(data.nurseries) && data.nurseries.length > 0) {
+                            const allSubSnap = await nurseriesCol(user.uid).get();
+                            if (cancelled) return;
+                            const subIds = new Set(allSubSnap.docs.map(d => d.id));
+                            const missing = data.nurseries.filter(n => n && n.id && !subIds.has(n.id));
+                            if (missing.length > 0) {
+                                const batch = db.batch();
+                                missing.forEach(n => {
+                                    const { id, ...rest } = n;
+                                    batch.set(nurseriesCol(user.uid).doc(id), rest);
+                                });
+                                batch.update(userDocRef, {
+                                    nurseries_rescued_v3: true,
+                                    nurseries_rescued_v3_count: missing.length,
+                                    nurseries_rescued_v3_at: firebase.firestore.FieldValue.serverTimestamp()
+                                });
+                                await batch.commit();
+                                if (!cancelled) console.info("[rescue] Restored", missing.length, "missing nurseries from array → subcollection.");
+                            } else {
+                                await userDocRef.update({
+                                    nurseries_rescued_v3: true,
+                                    nurseries_rescued_v3_count: 0,
+                                    nurseries_rescued_v3_at: firebase.firestore.FieldValue.serverTimestamp()
+                                });
+                                if (!cancelled) console.info("[rescue] No missing nurseries; subcollection is complete.");
+                            }
+                        }
                     } catch (e) {
                         if (!cancelled) console.error("[migration]", e);
                     }
