@@ -290,6 +290,67 @@
             );
         }
 
+        // 案内項目の名前を表示／インライン編集するコンポーネント。
+        // 通常時: クリックで完了トグル。鉛筆ボタンで編集モードに入る。
+        // 編集時: 入力欄になり、Enter または フォーカスを外すと保存（IME確定中のEnterは無視）。
+        function ItemTitle({ item, onToggle, onRename }) {
+            const [editing, setEditing] = useState(false);
+            const [text, setText] = useState(item.text);
+            const isComposing = useRef(false);
+
+            // 編集していない時は、外部（Firestore）更新をローカルに反映
+            useEffect(() => {
+                if (!editing) setText(item.text);
+            }, [item.text, editing]);
+
+            const commit = () => {
+                const t = text.trim();
+                if (t && t !== item.text) {
+                    onRename(item.id, 'text', t);
+                } else {
+                    setText(item.text); // 空 or 変更なしは元に戻す
+                }
+                setEditing(false);
+            };
+
+            if (editing) {
+                return (
+                    <input
+                        autoFocus
+                        value={text}
+                        onChange={(e) => setText(e.target.value)}
+                        onCompositionStart={() => { isComposing.current = true; }}
+                        onCompositionEnd={() => { isComposing.current = false; }}
+                        onBlur={commit}
+                        onKeyDown={(e) => {
+                            if (e.key === 'Enter' && !isComposing.current) { e.preventDefault(); commit(); }
+                            if (e.key === 'Escape') { setText(item.text); setEditing(false); }
+                        }}
+                        className="text-lg font-bold text-gray-800 bg-white border-2 border-primary-400 rounded-xl px-3 py-1.5 w-full focus:ring-2 focus:ring-primary-500 outline-none"
+                    />
+                );
+            }
+
+            return (
+                <div className="flex items-center gap-2 group/title min-w-0">
+                    <h3
+                        onClick={() => onToggle(item.id)}
+                        className={`text-lg font-bold cursor-pointer select-none transition-colors truncate ${item.completed ? 'text-gray-400 line-through' : 'text-gray-800'}`}
+                    >
+                        {item.text}
+                    </h3>
+                    <button
+                        type="button"
+                        onClick={() => setEditing(true)}
+                        title="項目名を編集"
+                        className="p-1.5 rounded-lg text-gray-300 hover:text-primary-600 hover:bg-primary-50 transition-colors flex-shrink-0 opacity-60 sm:opacity-0 sm:group-hover/title:opacity-100"
+                    >
+                        <IconEdit />
+                    </button>
+                </div>
+            );
+        }
+
         const createEmptyNurseryDetails = () => ({
             address: "",
             corporationName: "",
@@ -1269,15 +1330,14 @@
                                                         <IconCheck />
                                                     </button>
                                                     <div className="flex-1 min-w-0">
-                                                            <div className="flex-1 flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-4">
-                                                                <h3
-                                                                    onClick={() => handleToggleItem(item.id)}
-                                                                    className={`text-lg font-bold cursor-pointer select-none transition-colors ${item.completed ? 'text-gray-400 line-through' : 'text-gray-800'}`}
-                                                                >
-                                                                    {item.text}
-                                                                </h3>
+                                                            <div className="flex-1 flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-4 min-w-0">
+                                                                <ItemTitle
+                                                                    item={item}
+                                                                    onToggle={handleToggleItem}
+                                                                    onRename={handleUpdateItem}
+                                                                />
 
-                                                                <div className="flex items-center gap-2">
+                                                                <div className="flex items-center gap-2 flex-shrink-0">
                                                                     <div className="flex items-center bg-gray-100/50 p-1 rounded-xl border border-gray-200/50">
                                                                         <button
                                                                             onClick={() => handleUpdateItem(item.id, 'status', item.status === 'adopted' ? null : 'adopted')}
