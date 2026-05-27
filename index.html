@@ -938,12 +938,17 @@
 
             return (
                 <div className="max-w-5xl mx-auto px-4 py-8 md:py-12">
-                    {/* ── DEBUG PANEL（動作確認用・後で削除） ── */}
-                    <div style={{position:'fixed',bottom:12,right:12,zIndex:9999,background:'rgba(0,0,0,0.75)',color:'#0f0',fontFamily:'monospace',fontSize:'11px',padding:'8px 12px',borderRadius:'8px',lineHeight:1.6,pointerEvents:'none'}}>
-                        <div>🗃 nurseries (React state): <b>{nurseries.length}</b></div>
-                        <div>⏱ last onSnapshot: <b>{_lastSnapshotTime || '—'}</b></div>
-                        <div>👤 uid: {user?.uid?.slice(0,8)}…</div>
-                    </div>
+                    {/* ── DEBUG PANEL ──
+                        普段は非表示。URL に ?debug=1 を付けてアクセスした時だけ表示される。
+                        （データ同期の監視機能は常に動いており、表示だけを切り替えている）
+                        例: https://smizumoto-arch.github.io/nursery-guidance-app/?debug=1 */}
+                    {(typeof window !== 'undefined' && window.location.search.includes('debug')) && (
+                        <div style={{position:'fixed',bottom:12,right:12,zIndex:9999,background:'rgba(0,0,0,0.75)',color:'#0f0',fontFamily:'monospace',fontSize:'11px',padding:'8px 12px',borderRadius:'8px',lineHeight:1.6,pointerEvents:'none'}}>
+                            <div>🗃 nurseries (React state): <b>{nurseries.length}</b></div>
+                            <div>⏱ last onSnapshot: <b>{_lastSnapshotTime || '—'}</b></div>
+                            <div>👤 uid: {user?.uid?.slice(0,8)}…</div>
+                        </div>
+                    )}
                     {/* Header */}
                     <header className="flex items-center justify-between gap-6 mb-8">
                         <div className="flex items-center gap-3">
