@@ -351,6 +351,90 @@
             );
         }
 
+        // 園ごとの「全体メモ（面談記録・特記事項）」用カード。
+        // 各案内項目のメモとは別に、園そのものに対するメモを Firestore の
+        // generalMemo フィールドに保存する。
+        // - 入力中は localValue で保持（外部からの更新は IME 中・編集中は無視）
+        // - フォーカスを外す or 保存ボタンで Firestore に書き込み（変更があった時のみ）
+        // - 園を切り替えたらリセット
+        function NurseryGeneralMemo({ nurseryId, value, onSave }) {
+            const [localValue, setLocalValue] = useState(value || "");
+            const [isDirty, setIsDirty] = useState(false);
+            const [isSaving, setIsSaving] = useState(false);
+            const [lastSavedAt, setLastSavedAt] = useState("");
+            const isComposing = useRef(false);
+
+            // 園を切り替えた時はメモも切り替える
+            useEffect(() => {
+                setLocalValue(value || "");
+                setIsDirty(false);
+                setLastSavedAt("");
+            }, [nurseryId]);
+
+            // 外部（他端末など）からの更新を反映（編集中・IME中は無視）
+            useEffect(() => {
+                if (!isDirty && !isComposing.current) {
+                    setLocalValue(value || "");
+                }
+            }, [value]);
+
+            const commit = async () => {
+                if (!isDirty || isSaving) return;
+                setIsSaving(true);
+                try {
+                    await onSave(nurseryId, { generalMemo: localValue });
+                    setIsDirty(false);
+                    setLastSavedAt(new Date().toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' }));
+                } catch (e) {
+                    console.error('[generalMemo save]', e);
+                } finally {
+                    setIsSaving(false);
+                }
+            };
+
+            return (
+                <div className="glass-card rounded-[2rem] p-6 space-y-3">
+                    <div className="flex items-center justify-between gap-3 flex-wrap">
+                        <h3 className="text-sm font-bold text-gray-800">全体メモ（面談記録・特記事項）</h3>
+                        {isDirty
+                            ? <span className="text-[11px] font-bold text-amber-600 bg-amber-50 px-2 py-0.5 rounded-full">未保存</span>
+                            : (lastSavedAt && <span className="text-[11px] text-gray-400">保存済 {lastSavedAt}</span>)}
+                    </div>
+                    <p className="text-xs text-gray-500 leading-relaxed">
+                        園長先生との会話記録や、この園に関する全体的な特記事項をここに残します。
+                        （各案内項目ごとのメモとは別の、園そのもののメモです）
+                    </p>
+                    <textarea
+                        value={localValue}
+                        placeholder="例：園長○○先生は明るく協力的。子育て支援に積極的。次回は5/30に再訪予定。"
+                        onCompositionStart={() => { isComposing.current = true; }}
+                        onCompositionEnd={(e) => {
+                            isComposing.current = false;
+                            setLocalValue(e.target.value);
+                            setIsDirty(true);
+                        }}
+                        onChange={(e) => {
+                            setLocalValue(e.target.value);
+                            if (!isComposing.current) setIsDirty(true);
+                        }}
+                        onBlur={commit}
+                        className="w-full bg-gray-50 border border-gray-200 rounded-2xl p-4 text-sm leading-relaxed focus:ring-2 focus:ring-primary-500 focus:border-primary-400 transition-all min-h-[160px] resize-y outline-none"
+                    />
+                    <div className="flex justify-end">
+                        <button
+                            type="button"
+                            onMouseDown={(e) => e.preventDefault()}
+                            onClick={commit}
+                            disabled={!isDirty || isSaving}
+                            className="px-5 py-2 rounded-xl bg-primary-600 text-white text-sm font-bold hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all-custom"
+                        >
+                            {isSaving ? "保存中…" : "保存する"}
+                        </button>
+                    </div>
+                </div>
+            );
+        }
+
         const createEmptyNurseryDetails = () => ({
             address: "",
             corporationName: "",
@@ -1272,6 +1356,13 @@
                                             <p className="text-sm text-rose-600 font-medium">{pdfUploadError}</p>
                                         )}
                                     </div>
+
+                                    {/* General Memo（園そのもののメモ） */}
+                                    <NurseryGeneralMemo
+                                        nurseryId={selectedNursery.id}
+                                        value={selectedNursery.generalMemo}
+                                        onSave={updateNurseryDoc}
+                                    />
 
                                     {/* Filter Tabs */}
                                     <div className="space-y-2">
