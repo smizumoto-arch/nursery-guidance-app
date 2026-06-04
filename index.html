@@ -47,28 +47,59 @@
 
     <style>
         :root {
-            --glass-bg: rgba(255, 255, 255, 0.95);
-            --glass-border: #e2e8f0;
+            --card-bg: #ffffff;
+            --card-border: rgba(226, 232, 240, 0.7);
         }
 
+        /* ふんわり立体感のあるモダンSaaS風背景：左上から右下にかけて
+           ごく淡いコバルト → アイボリーのグラデーション。動くと景色が変わる感じ。 */
         body {
-            background: #eef2f7;
+            background: linear-gradient(135deg, #f5f7ff 0%, #fafbff 45%, #fff8f3 100%);
+            background-attachment: fixed;
             min-height: 100vh;
-            color: #1e293b;
+            color: #0f172a;
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
         }
 
-        /* カードは「すりガラス」より「くっきりした白いカード」に。
-           境界線と影をはっきりさせて情報を読み取りやすく。 */
+        /* カードは純白＋多層シャドウで立体感を強調（Linear / Notion 風）。 */
         .glass-card {
-            background: var(--glass-bg);
-            backdrop-filter: blur(6px);
-            -webkit-backdrop-filter: blur(6px);
-            border: 1px solid var(--glass-border);
-            box-shadow: 0 1px 3px rgba(15, 23, 42, 0.06), 0 8px 24px -8px rgba(15, 23, 42, 0.08);
+            background: var(--card-bg);
+            border: 1px solid var(--card-border);
+            box-shadow:
+                0 1px 2px rgba(15, 23, 42, 0.04),
+                0 4px 12px -2px rgba(15, 23, 42, 0.05),
+                0 12px 32px -8px rgba(15, 23, 42, 0.08);
         }
 
         .premium-shadow {
-            box-shadow: 0 1px 3px rgba(15, 23, 42, 0.08), 0 4px 12px -4px rgba(15, 23, 42, 0.10);
+            box-shadow:
+                0 2px 4px rgba(15, 23, 42, 0.04),
+                0 8px 24px -4px rgba(15, 23, 42, 0.10);
+        }
+
+        /* メインCTA用のリッチなグラデーションボタン。 */
+        .btn-gradient-primary {
+            background: linear-gradient(135deg, #4f7bff 0%, #2546eb 50%, #1d36d8 100%);
+            box-shadow:
+                0 1px 2px rgba(37, 70, 235, 0.18),
+                0 8px 20px -6px rgba(37, 70, 235, 0.45);
+            transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+        .btn-gradient-primary:hover {
+            box-shadow:
+                0 2px 6px rgba(37, 70, 235, 0.22),
+                0 14px 28px -6px rgba(37, 70, 235, 0.5);
+            transform: translateY(-1px);
+        }
+        .btn-gradient-primary:active {
+            transform: translateY(0);
+        }
+
+        /* スマホでのタップ最低サイズを担保するためのユーティリティ。 */
+        .tap-target {
+            min-width: 44px;
+            min-height: 44px;
         }
 
         .animate-float {
@@ -455,7 +486,7 @@
             const [newFurigana, setNewFurigana] = useState("");
             const [newDetails, setNewDetails] = useState(createEmptyNurseryDetails());
             const [searchQuery, setSearchQuery] = useState("");
-            const [regionFilter, setRegionFilter] = useState("");
+            const [regionFilters, setRegionFilters] = useState([]); // 複数選択（OR条件）。空配列=すべて表示
             const [filterStatus, setFilterStatus] = useState("all"); // "all", "completed", "uncompleted"
             const [showImportantOnly, setShowImportantOnly] = useState(false);
             const [isAuthChecking, setIsAuthChecking] = useState(true);
@@ -732,12 +763,13 @@
                 return nurseries
                     .filter(n =>
                         (n.name || "").toLowerCase().includes(searchQuery.toLowerCase()) &&
-                        (regionFilter === "" || n.region === regionFilter)
+                        // 地域フィルタ未選択なら全件、選択ありなら「いずれかに一致」(OR条件)
+                        (regionFilters.length === 0 || regionFilters.includes(n.region))
                     )
                     .sort((a, b) =>
                         getSortKey(a).localeCompare(getSortKey(b), "ja", { sensitivity: "base" })
                     );
-            }, [nurseries, searchQuery, regionFilter]);
+            }, [nurseries, searchQuery, regionFilters]);
 
             const selectedNursery = nurseries.find(n => n.id === selectedId);
 
@@ -753,7 +785,13 @@
                 });
             }, [selectedNursery, filterStatus, showImportantOnly]);
 
-            const regions = Array.from(new Set(nurseries.map(n => n.region).filter(Boolean)));
+            const regions = Array.from(new Set(nurseries.map(n => n.region).filter(Boolean)))
+                .sort((a, b) => a.localeCompare(b, "ja"));
+            const toggleRegionFilter = (region) => {
+                setRegionFilters(prev =>
+                    prev.includes(region) ? prev.filter(r => r !== region) : [...prev, region]
+                );
+            };
             const isHiragana = (value) => /^[\u3041-\u3096\u30fc\s]+$/.test((value || "").trim());
 
             // [DATA-MODEL-V2] 以下すべてのハンドラは「触った園のドキュメントだけ」を
@@ -1097,7 +1135,7 @@
                     {/* Header */}
                     <header className="flex items-center justify-between gap-6 mb-8">
                         <div className="flex items-center gap-3">
-                            <div className="p-3 bg-primary-600 text-white rounded-2xl premium-shadow">
+                            <div className="p-3 text-white rounded-2xl btn-gradient-primary">
                                 <IconSchool />
                             </div>
                             <div>
@@ -1124,7 +1162,7 @@
                                     <h2 className="text-lg font-heading font-bold text-gray-800">保育園リスト</h2>
                                     <button
                                         onClick={() => setIsAddingNursery(!isAddingNursery)}
-                                        className={`p-2 rounded-xl transition-all-custom ${isAddingNursery ? 'bg-rose-100 text-rose-600 rotate-45' : 'bg-primary-100 text-primary-600 hover:scale-110'}`}
+                                        className={`tap-target flex items-center justify-center rounded-xl transition-all-custom ${isAddingNursery ? 'bg-rose-100 text-rose-600 rotate-45' : 'btn-gradient-primary text-white hover:scale-105'}`}
                                     >
                                         <IconPlus />
                                     </button>
@@ -1142,14 +1180,45 @@
                                             onChange={e => setSearchQuery(e.target.value)}
                                         />
                                     </div>
-                                    <select
-                                        className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-2xl focus:ring-2 focus:ring-primary-500 focus:border-primary-400 transition-all outline-none text-sm appearance-none"
-                                        value={regionFilter}
-                                        onChange={e => setRegionFilter(e.target.value)}
-                                    >
-                                        <option value="">すべての地域</option>
-                                        {regions.map(r => <option key={r} value={r}>{r}</option>)}
-                                    </select>
+                                    {/* [REGION-MULTI] 地域の複数選択（チップ型）。タップでON/OFF、OR条件で絞り込み。 */}
+                                    {regions.length > 0 && (
+                                        <div className="bg-gray-50 border border-gray-200 rounded-2xl p-3">
+                                            <div className="flex items-center justify-between mb-2 px-1">
+                                                <span className="text-xs font-bold text-gray-500">
+                                                    地域でしぼり込み
+                                                    {regionFilters.length > 0 && (
+                                                        <span className="ml-1 text-primary-600">（{regionFilters.length}件選択中）</span>
+                                                    )}
+                                                </span>
+                                                {regionFilters.length > 0 && (
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => setRegionFilters([])}
+                                                        className="text-xs font-bold text-gray-400 hover:text-rose-500 transition-colors"
+                                                    >
+                                                        クリア
+                                                    </button>
+                                                )}
+                                            </div>
+                                            <div className="flex flex-wrap gap-2">
+                                                {regions.map(r => {
+                                                    const active = regionFilters.includes(r);
+                                                    return (
+                                                        <button
+                                                            key={r}
+                                                            type="button"
+                                                            onClick={() => toggleRegionFilter(r)}
+                                                            className={`px-3.5 py-2 rounded-full text-xs font-bold transition-all-custom border ${active
+                                                                ? 'btn-gradient-primary text-white border-transparent'
+                                                                : 'bg-white text-gray-600 border-gray-200 hover:border-primary-300 hover:text-primary-600 active:bg-primary-50'}`}
+                                                        >
+                                                            {active && <span className="mr-1">✓</span>}{r}
+                                                        </button>
+                                                    );
+                                                })}
+                                            </div>
+                                        </div>
+                                    )}
                                     <button
                                         onClick={handleDownloadNurseryCsv}
                                         disabled={nurseries.length === 0}
@@ -1190,7 +1259,7 @@
                                             <div
                                                 key={n.id}
                                                 onClick={() => setSelectedId(n.id)}
-                                                className={`p-5 rounded-[1.5rem] cursor-pointer transition-all-custom group border ${selectedId === n.id ? 'bg-primary-600 text-white border-primary-600 premium-shadow scale-[1.02]' : 'bg-white hover:bg-primary-50 border-gray-200 hover:border-primary-200'}`}
+                                                className={`p-5 rounded-[1.5rem] cursor-pointer transition-all-custom group border ${selectedId === n.id ? 'btn-gradient-primary text-white border-transparent scale-[1.015]' : 'bg-white hover:bg-primary-50/40 border-gray-200 hover:border-primary-200 hover:-translate-y-0.5 hover:shadow-md'}`}
                                             >
                                                 <div className="flex justify-between items-start mb-3">
                                                     <div>
@@ -1198,7 +1267,16 @@
                                                         <p className={`text-[11px] opacity-60`}>{n.furigana || "ふりがな未設定"}</p>
                                                         <p className={`text-[11px] font-bold uppercase tracking-wider opacity-60`}>{n.region || 'Unknown'}</p>
                                                     </div>
-                                                    <div className="flex items-center gap-1">
+                                                    {/* [TAP-FIX] 編集・削除ボタンは独立した操作領域として配置：
+                                                          - モバイル(<sm)では常時表示・周囲に余白
+                                                          - デスクトップ(sm以上)ではホバーで出現
+                                                          - 最低44pxのタップエリア（tap-target）を確保
+                                                          - 各ボタンで stopPropagation を実行し、親カードへの伝播を遮断 */}
+                                                    <div
+                                                        className="flex items-center gap-1 ml-2 flex-shrink-0"
+                                                        onClick={(e) => e.stopPropagation()}
+                                                        onTouchEnd={(e) => e.stopPropagation()}
+                                                    >
                                                         {n.pdfUrl && (
                                                             <button
                                                                 type="button"
@@ -1208,20 +1286,24 @@
                                                                     setSelectedId(n.id);
                                                                     setPdfViewerOpen(true);
                                                                 }}
-                                                                className={`p-1.5 rounded-lg opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity ${selectedId === n.id ? 'hover:bg-primary-500 text-white' : 'hover:bg-white text-primary-600 bg-white/80'}`}
+                                                                className={`tap-target flex items-center justify-center rounded-xl text-base transition-all-custom ${selectedId === n.id ? 'text-white/90 hover:bg-white/15 active:bg-white/25' : 'text-primary-600 bg-primary-50/60 hover:bg-white active:bg-white border border-primary-100/70'}`}
                                                             >
                                                                 📄
                                                             </button>
                                                         )}
                                                         <button
+                                                            type="button"
+                                                            title="編集"
                                                             onClick={(e) => { e.stopPropagation(); openEditNursery(n); }}
-                                                            className={`p-1.5 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity ${selectedId === n.id ? 'hover:bg-primary-500 text-white' : 'hover:bg-primary-50 text-primary-500'}`}
+                                                            className={`tap-target flex items-center justify-center rounded-xl transition-all-custom sm:opacity-0 sm:group-hover:opacity-100 ${selectedId === n.id ? 'text-white/90 hover:bg-white/15 active:bg-white/25 opacity-100' : 'text-primary-600 hover:bg-primary-50 active:bg-primary-100 opacity-90 hover:opacity-100'}`}
                                                         >
                                                             <IconEdit />
                                                         </button>
                                                         <button
+                                                            type="button"
+                                                            title="削除"
                                                             onClick={(e) => { e.stopPropagation(); handleDeleteNursery(n.id); }}
-                                                            className={`p-1.5 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity ${selectedId === n.id ? 'hover:bg-primary-500 text-white' : 'hover:bg-rose-50 text-rose-400'}`}
+                                                            className={`tap-target flex items-center justify-center rounded-xl transition-all-custom sm:opacity-0 sm:group-hover:opacity-100 ${selectedId === n.id ? 'text-white/90 hover:bg-white/15 active:bg-white/25 opacity-100' : 'text-rose-400 hover:bg-rose-50 hover:text-rose-600 active:bg-rose-100 opacity-80 hover:opacity-100'}`}
                                                         >
                                                             <IconTrash />
                                                         </button>
@@ -1559,11 +1641,27 @@
                     )}
 
                     {editingNurseryId && (
-                        <div className="fixed inset-0 z-50 bg-black/30 backdrop-blur-sm flex items-center justify-center px-4">
-                            <form onSubmit={handleSaveNurseryEdit} className="w-full max-w-md glass-card rounded-[2rem] p-6 space-y-4 border border-white/60">
-                                <div className="flex items-center justify-between">
-                                    <h3 className="text-lg font-heading font-bold text-gray-800">園情報を編集</h3>
-                                    <button type="button" onClick={closeEditNursery} className="px-3 py-1 text-sm text-gray-500 hover:text-gray-700">閉じる</button>
+                        <div
+                            className="fixed inset-0 z-50 bg-slate-950/40 backdrop-blur-sm flex items-end sm:items-center justify-center sm:px-4"
+                            onClick={(e) => { if (e.target === e.currentTarget) closeEditNursery(); }}
+                        >
+                            <form
+                                onSubmit={handleSaveNurseryEdit}
+                                className="w-full sm:max-w-md max-h-[92vh] overflow-y-auto bg-white rounded-t-[2rem] sm:rounded-[2rem] p-5 sm:p-6 space-y-4 border border-gray-200 shadow-2xl"
+                            >
+                                {/* [BACK-BTN] モーダル上部に大きな戻るボタンを配置（左上）。
+                                    スマホでも片手で押せるタップ領域（44px）を確保。 */}
+                                <div className="flex items-center justify-between gap-3 -mt-1 mb-1">
+                                    <button
+                                        type="button"
+                                        onClick={closeEditNursery}
+                                        className="tap-target flex items-center gap-1 -ml-2 px-3 rounded-xl text-primary-700 font-bold text-sm hover:bg-primary-50 active:bg-primary-100 transition-all-custom"
+                                    >
+                                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M15 19l-7-7 7-7" /></svg>
+                                        戻る
+                                    </button>
+                                    <h3 className="text-base sm:text-lg font-heading font-bold text-gray-900">園情報を編集</h3>
+                                    <span className="w-12" aria-hidden="true"></span>
                                 </div>
                                 <div>
                                     <label className="block text-xs font-bold text-gray-500 mb-1">園名</label>
